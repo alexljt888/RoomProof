@@ -1,0 +1,5 @@
+{"image_id":"img_001","path":"test_images/img_001.jpg","sha256":"0000000000000000000000000000000000000000000000000000000000000000","split":"development","scene_group":"scene_001"}
+{"image_id":"img_002","path":"test_images/img_002.jpg","sha256":"1111111111111111111111111111111111111111111111111111111111111111","split":"held_out","scene_group":"scene_002"}
+{"image_id": "img003", "path": "test_images/img003.jpg", "sha256": "2222222222222222222222222222222222222222222222222222222222222222", "split": "development", "scene_group": "synthetic_2"}
+{"image_id": "img004", "path": "test_images/img004.jpg", "sha256": "3333333333333333333333333333333333333333333333333333333333333333", "split": "development", "scene_group": "synthetic_3"}
+{"image_id": "img005", "path": "test_images/img005.jpg", "sha256": "4444444444444444444444444444444444444444444444444444444444444444", "split": "development", "scene_group": "synthetic_4"}
