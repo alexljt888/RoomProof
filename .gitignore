@@ -149,6 +149,9 @@ activemq-data/
 
 # Environments
 .env
+.env.*
+# A deliberately public template may be added later; never put secrets in it.
+!.env.example
 .envrc
 .venv
 env/
@@ -216,3 +219,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local inspection evidence and evaluations (never publish)
+/ml/data/
+/ml/results/
+# macOS metadata, at any directory depth
+.DS_Store
