@@ -1,0 +1,1 @@
+"""RoomProof backend domain foundation."""
