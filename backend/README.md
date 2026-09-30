@@ -1,10 +1,19 @@
 # Backend domain foundation
 
-Python 3.11+ and the standard library only. From the repository root:
+Python 3.11+. Domain, repository, and services use the standard library;
+the HTTP layer uses FastAPI/Pydantic. From the repository root, create a
+separate backend environment (keep the existing ML environment unchanged):
 
 ```sh
-python3 -m unittest discover -s backend/tests -v
+python3 -m venv backend/.venv
+backend/.venv/bin/python -m pip install -r backend/requirements.txt
+PYTHONDONTWRITEBYTECODE=1 backend/.venv/bin/python -m unittest discover -s backend/tests -v
+backend/.venv/bin/python -m uvicorn backend.app.main:create_app --factory --host 127.0.0.1 --port 8000
 ```
+
+Visit `http://127.0.0.1:8000/docs` for the local interactive contract. HTTP tests
+use TestClient in process; no server, network requests, image files, or API key
+are needed. HTTPX is included for TestClient; unittest remains the test runner.
 
 `app/domain.py` defines inspections with embedded property details and renter
 names, rooms, registered photo metadata, analyses, and findings. Parent object
@@ -68,7 +77,7 @@ back into the repository. They are not an external mutation API.
 
 `services.py` supports `create_inspection`, `add_room`, `register_photo`,
 `analyze_photo`, `confirm_finding`, `edit_and_confirm_finding`, `reject_finding`,
-and `get_inspection`. Operations return detached `InspectionState` snapshots.
+`get_inspection`, and `list_inspections`. Operations return detached `InspectionState` snapshots.
 Resources are looked up within the requested inspection; unknown or foreign IDs
 raise `NotFound`. Malformed IDs/content raise `InvalidDomainData`. UUID possession
 is not authorization. Approved evidence IDs resolve to registered photos, and
@@ -120,6 +129,70 @@ state = service.analyze_photo(inspection_id, photo_id)
 
 This repository is development/testing only: process-local, non-durable, no
 persistence across restart, and unsuitable for multiple production workers.
-There is no upload, filesystem image loading, real image analysis, authentication,
-HTTP API, or report generation. A process interruption can leave a pending
+There is no upload/storage, filesystem image loading, real AI/image inference,
+authentication, frontend, or PDF/report generation. A process interruption can leave a pending
 analysis in a surviving repository instance; recovery/timeouts are not implemented.
+
+
+## HTTP workflow
+
+`main.create_app(analyzer=...)` creates a fresh in-memory repository and service
+for each application. Tests inject deterministic scenarios through the factory;
+there is no scenario-selection HTTP field. The default fake always proposes one
+synthetic clear wall scratch and explicitly reports that no image was inspected.
+Restarting the app loses all state. This is a local workflow milestone, not a
+production-ready inspection system.
+
+| Method | Path | Success response |
+| --- | --- | --- |
+| POST | `/inspections` | 201, inspection state |
+| GET | `/inspections` | 200, inspection summaries |
+| GET | `/inspections/{inspection_id}` | 200, inspection state |
+| POST | `/inspections/{inspection_id}/rooms` | 201, updated inspection state |
+| POST | `/inspections/{inspection_id}/rooms/{room_id}/photos` | 201, updated inspection state |
+| POST | `/inspections/{inspection_id}/photos/{photo_id}/analyses` | 200, updated inspection state, including handled failure |
+| POST | `/inspections/{inspection_id}/findings/{finding_id}/review` | 200, updated inspection state |
+
+Request schemas forbid unknown fields and client-supplied IDs/timestamps.
+Review requests are discriminated by `action`:
+
+- `confirm`: requires a JSON boolean `reportable`; copies original content/evidence.
+- `edit_and_confirm`: requires category, surface, location, description, and a JSON
+  boolean `reportable`. Optional `evidence_photo_ids` follow the service rules above.
+- `reject`: accepts only the action and an optional reason; no approved content.
+
+Clients cannot directly submit a finding state, review record, or report
+eligibility. Routes only translate inputs and call services. `schemas.py` maps
+explicit fields to responses; parent references become UUIDs, never recursive
+Python objects. Findings expose `original_proposal`, separate `review.approved`,
+source analysis ID, state, and eligibility. Analyses expose provenance, status,
+outcome, completion time, limitations, and safe failure code. UUIDs and UTC times
+serialize as strings. Photos remain registered metadata, not verified uploads.
+
+Application/domain errors have the stable shape:
+
+```json
+{"error": {"code": "not_found", "message": "Resource not found in the requested inspection."}}
+```
+
+`NotFound` maps to 404/`not_found`; `TransitionConflict` to
+409/`transition_conflict`; `InvalidDomainData` to 422/`invalid_domain_input`.
+Messages are fixed and do not expose exception text. Unknown and foreign resource
+IDs share the same scoped 404. A registered photo in the wrong room, duplicate
+evidence, and empty evidence map to domain 422. These checks are resource scoping,
+not authentication.
+
+FastAPI request validation keeps its normal 422 `detail` response. It runs before
+services, so malformed review requests can return schema 422 even for already
+reviewed findings; valid repeated actions return 409. Handled analyzer failures
+remain failed analysis state with HTTP 200, rather than becoming server errors.
+
+
+OpenAPI documents both HTTP 422 shapes on domain-validating operations using
+an `anyOf` union of `HTTPValidationError` and `ErrorResponse`. The validation
+models are documentation-only; FastAPI's built-in handler remains unchanged.
+
+Known P2 item for final Phase 2 review: Starlette 1.7.0 TestClient emits
+`StarletteDeprecationWarning` when falling back to HTTPX 0.28.1. Installed
+requirements are compatible and tests pass; the warning is not suppressed.
+Dependency cleanup is deferred and does not change runtime correctness.

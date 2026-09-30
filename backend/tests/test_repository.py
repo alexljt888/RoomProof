@@ -52,3 +52,13 @@ class RepositoryTests(unittest.TestCase):
         with self.assertRaises(InvalidDomainData):
             self.repo.update(self.inspection.id, invalid)
         self.assertEqual(self.repo.get(self.inspection.id).rooms, {})
+
+
+    def test_list_inspections_returns_detached_summaries(self):
+        listed = self.repo.list_inspections()
+        self.assertEqual([i.id for i in listed], [self.inspection.id])
+        self.assertIsNot(listed[0], self.inspection)
+        self.assertIsNot(listed[0], self.repo.list_inspections()[0])
+        listed.clear()
+        self.assertEqual(len(self.repo.list_inspections()), 1)
+        self.assertEqual(InMemoryInspectionRepository().list_inspections(), [])

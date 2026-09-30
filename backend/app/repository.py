@@ -60,6 +60,7 @@ class InspectionState:
 class InspectionRepository(Protocol):
     def create(self, inspection: Inspection) -> InspectionState: ...
     def get(self, inspection_id: UUID) -> InspectionState: ...
+    def list_inspections(self) -> list[Inspection]: ...
     def update(self, inspection_id: UUID,
                operation: Callable[[InspectionState], None]) -> InspectionState: ...
 
@@ -82,6 +83,10 @@ class InMemoryInspectionRepository:
     def get(self, inspection_id: UUID) -> InspectionState:
         with self._lock:
             return deepcopy(lookup(self._states, inspection_id))
+
+    def list_inspections(self) -> list[Inspection]:
+        with self._lock:
+            return deepcopy([state.inspection for state in self._states.values()])
 
     def update(self, inspection_id: UUID,
                operation: Callable[[InspectionState], None]) -> InspectionState:

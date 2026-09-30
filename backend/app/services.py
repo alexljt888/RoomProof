@@ -21,6 +21,9 @@ class InspectionService:
     def get_inspection(self, inspection_id: UUID) -> InspectionState:
         return self.repository.get(inspection_id)
 
+    def list_inspections(self) -> list[Inspection]:
+        return self.repository.list_inspections()
+
     def add_room(self, inspection_id: UUID, name: str) -> InspectionState:
         def add(state):
             room = Room(state.inspection, name)
