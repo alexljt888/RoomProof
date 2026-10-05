@@ -236,3 +236,53 @@ image upload, filesystem loading, S3, or real AI calls are implemented in this s
 The development source retains all bound bytes until its instance is released;
 it has no total-storage quota and is not production storage. Synthetic in-memory
 tests run with the existing backend test command above.
+
+## Phase 3 Step 2: OpenAI adapter (not activated)
+
+`openai_analyzer.py` implements `OpenAIPhotoAnalyzer` with an injected image source,
+SDK client, and frozen `AnalyzerConfig` requiring an explicit model identifier.
+It creates no client, reads no environment or `.env`, and makes no request at import.
+Client creation, credential loading, lifecycle, and application activation belong
+to later composition work. The normal `create_app()` still uses `FakePhotoAnalyzer`.
+No real-provider smoke test has occurred for this adapter.
+
+`analyze(photo)` uses only `photo.id` to resolve bytes, calls Step 1 preparation,
+and sends the prepared PNG plus the versioned instructions using Responses
+`parse(text_format=ProviderResult, store=False)`. No filename, path, renter,
+address, inspection graph, or evidence IDs are sent. The injected client's options
+are copied with a finite timeout (90 seconds by default) and `max_retries=0`.
+There is at most one SDK request invocation per analysis, and none for invalid
+image input. Composition must not inject a custom transport that independently
+retries requests. The caller owns the client's shared transport lifetime.
+
+The adapter's Pydantic schema uses all five surfaces and eight categories, keeping
+`chip` distinct from `chipped_paint`. `findings_present` requires at least one clear
+observation; `uncertain` permits only possible observations or none;
+`no_visible_findings` requires none. Empty observation text/limitations, unknown
+vocabulary, and extra approval/reportability fields are rejected. Structured
+responses are translated into the existing `AnalysisOutput`/`ProposedFinding`
+values; the provider schema never enters the domain. AI supplies observations,
+never approval or reportability, and the service still attaches source evidence.
+
+Image-layer failures map to `unreadable_image`. Provider failures (including
+credentials, timeout, rate limit, and unexpected SDK exceptions) map to
+`unavailable`. Refusal, incomplete/missing structured output, SDK response
+validation errors, and schema/semantic violations raise `AnalyzerContractError`
+for existing `invalid_response` handling. Messages are fixed; provider diagnostics
+are not returned. No fallback model or automatic model retry is selected.
+
+`analyze_with_metadata(photo)` performs the same single execution but returns a
+frozen `AnalyzerExecution(output, metadata)`. Use it instead of calling `analyze`
+when provenance is needed, not afterward (which would run a second analysis).
+Metadata contains analyzer/model identifiers, prompt/schema versions and SHA-256,
+preparation version, and original/prepared image hashes. The schema hash identifies
+the canonical Pydantic JSON schema, not the SDK's transformed wire schema. Exact
+prompt/schema definitions are versioned in source. There is no mutable last-result
+state; metadata is not persisted into `Analysis` yet. Failed calls raise safe errors
+and do not return execution metadata; Step 3 must capture configured provenance
+when reserving an attempt. Image hashes remain private if exported later.
+
+Normal tests use generated in-memory images and injected clients. They need no
+API key, private images, or network. OpenAI 3.8.0 adds HTTPX2 transitively; with it
+installed, Starlette 1.7.0 selects HTTPX2 and no longer emits the previously noted
+HTTPX fallback warning. The existing direct dependency pins remain unchanged.
