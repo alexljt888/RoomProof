@@ -196,3 +196,43 @@ Known P2 item for final Phase 2 review: Starlette 1.7.0 TestClient emits
 `StarletteDeprecationWarning` when falling back to HTTPX 0.28.1. Installed
 requirements are compatible and tests pass; the warning is not suppressed.
 Dependency cleanup is deferred and does not change runtime correctness.
+
+## Phase 3 Step 1: transient image preparation
+
+`images.py` adds a provider-neutral `ImageSource.read(photo_id) -> bytes` boundary.
+`InMemoryImageSource.bind(photo_id, content)` binds bytes once to a UUID, with a
+lock and defensive copying of bytearrays. Missing and duplicate bindings fail;
+instances share no state. This is development infrastructure, not an upload API.
+The source never interprets filenames or paths and does not verify domain ownership;
+the existing service remains responsible for scoped photo lookup. A future storage
+source can implement the same read contract.
+
+`prepare_image` detects actual JPEG/PNG content, verifies integrity and fully
+decodes pixels, applies EXIF orientation, composites transparency onto white, and
+encodes a fresh RGB PNG without EXIF, ICC, or text metadata. Grayscale is converted
+to RGB. Animated/multipage images and other formats (including HEIC/HEIF) are
+unsupported even though the domain permits their metadata declarations.
+
+The versioned `rgb-png-v1` policy limits input to 20 MiB and decoded images to
+20 million pixels, accommodating ordinary apartment photos while bounding per-call
+memory use. Images above a 4096-pixel longest side are reduced with aspect-preserving
+Lanczos resizing; smaller images are not resized. This preserves substantial detail
+without forwarding arbitrarily large images. Fresh PNG avoids another lossy JPEG
+encode; prepared output is capped at 32 MiB during encoding. These limits are local
+preparation policy, not provider limits. Resizing can still reduce subtle detail.
+Pillow's bomb protections remain enabled; the explicit pixel cap is stricter than
+its default threshold. Existing Pillow warnings are not globally suppressed.
+
+`PreparedImage` is a transient frozen value holding immutable encoded bytes
+(excluded from repr), output media type/dimensions, original and prepared SHA-256,
+and policy version. Hashes describe content, not guaranteed model repeatability;
+PNG byte reproducibility is scoped to the same policy and encoder environment.
+Do not log or serialize image bytes; repr exclusion is not a general redaction tool.
+Image-layer errors distinguish missing bindings, duplicate bindings, invalid
+images, unsupported formats, and resource limits using fixed safe messages.
+
+No bytes or hashes enter `Photo` or `InspectionState`. No service/analyzer wiring,
+image upload, filesystem loading, S3, or real AI calls are implemented in this step.
+The development source retains all bound bytes until its instance is released;
+it has no total-storage quota and is not production storage. Synthetic in-memory
+tests run with the existing backend test command above.
