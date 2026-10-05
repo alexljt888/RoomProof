@@ -1,4 +1,4 @@
-"""Local Phase 2 API factory. The default analyzer is fake and offline."""
+"""Local API factory. The default analyzer is fake and offline."""
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -10,8 +10,9 @@ from .services import InspectionService
 
 
 def create_app(*, analyzer: PhotoAnalyzer | None = None) -> FastAPI:
-    app = FastAPI(title="RoomProof Phase 2 — fake analysis", version="0.1.0",
-                  description="Local, non-durable workflow API. Photos are metadata only; no real AI.")
+    app = FastAPI(title="RoomProof — inspection workflow", version="0.1.0",
+                  description=("Local, non-durable workflow API. Photos are metadata only; "
+                               "the default analyzer is fake. Analyzers may be injected."))
     if analyzer is None:
         analyzer = FakePhotoAnalyzer(AnalysisOutput(
             AnalysisOutcome.FINDINGS_PRESENT,

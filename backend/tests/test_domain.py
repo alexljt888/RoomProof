@@ -163,9 +163,9 @@ class DomainTests(unittest.TestCase):
             with self.assertRaises(TransitionConflict):
                 operation()
         with self.assertRaises(InvalidDomainData):
-            AnalysisResult(AnalysisStatus.FAILED, failure_code="raw provider exception")
+            AnalysisResult(AnalysisStatus.FAILED, analysis.attempt_provenance, failure_code="raw provider exception")
         with self.assertRaises(InvalidDomainData):
-            AnalysisResult(AnalysisStatus.SUCCEEDED, AnalysisOutcome.NO_VISIBLE_FINDINGS, failure_code=FailureCode.UNAVAILABLE)
+            AnalysisResult(AnalysisStatus.SUCCEEDED, analysis.attempt_provenance, AnalysisOutcome.NO_VISIBLE_FINDINGS, failure_code=FailureCode.UNAVAILABLE)
 
     def test_invalid_content_and_review_combinations(self):
         cases = (
@@ -277,6 +277,36 @@ class DomainTests(unittest.TestCase):
             with self.assertRaises(InvalidDomainData):
                 action(finding)
             self.assertIsNone(finding.review)
+
+
+class ProvenanceTests(unittest.TestCase):
+    def test_validation_and_terminal_consistency(self):
+        from dataclasses import FrozenInstanceError, replace
+        from backend.app.domain import AnalysisProvenance
+        configured = AnalysisProvenance('synthetic', '1', requested_model='model',
+                                        prompt_version='p1', prompt_sha256='a' * 64)
+        for changes in ({'analyzer_id': ' '}, {'requested_model': ''},
+                        {'prompt_sha256': 'x' * 64}, {'schema_version': 's1'},
+                        {'original_sha256': 'a' * 64}, {'prompt_version': None}):
+            with self.subTest(changes=changes), self.assertRaises(InvalidDomainData):
+                replace(configured, **changes)
+        photo = Photo(Room(Inspection(PropertyDetails('Example'), 'Renter'), 'Room'), 'a.png', 'image/png')
+        analysis = Analysis(photo, 'synthetic', '1', configured)
+        self.assertEqual(analysis.attempt_provenance, configured)
+        with self.assertRaises(FrozenInstanceError):
+            configured.requested_model = 'other'
+        for bad in (replace(configured, analyzer_id='other'),
+                    replace(configured, requested_model='different'),
+                    replace(configured, requested_model=None)):
+            with self.assertRaises(InvalidDomainData):
+                analysis.complete(AnalysisOutcome.NO_VISIBLE_FINDINGS, provenance=bad)
+            self.assertEqual(analysis.status, AnalysisStatus.PENDING)
+        final = replace(configured, provider_model='reported')
+        analysis.complete(AnalysisOutcome.NO_VISIBLE_FINDINGS, provenance=final)
+        with self.assertRaises(FrozenInstanceError):
+            analysis.result.provenance = configured
+        with self.assertRaises(TransitionConflict):
+            analysis.fail(FailureCode.UNAVAILABLE, provenance=final)
 
 
 if __name__ == "__main__":

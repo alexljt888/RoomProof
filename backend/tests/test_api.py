@@ -5,8 +5,8 @@ from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 
-from backend.app.domain import AnalysisOutcome, FailureCode
-from backend.app.inference import AnalysisOutput, FakePhotoAnalyzer
+from backend.app.domain import AnalysisOutcome, AnalysisProvenance, FailureCode
+from backend.app.inference import AnalyzerExecution, AnalysisOutput, FakePhotoAnalyzer
 from backend.app.main import create_app
 
 
@@ -205,6 +205,7 @@ class ApiTests(unittest.TestCase):
         class Broken:
             analyzer_id = 'broken-test'
             analyzer_version = '1'
+            configured_provenance = AnalysisProvenance(analyzer_id, analyzer_version)
             def analyze(self, photo):
                 raise RuntimeError('synthetic sensitive diagnostic')
         with TestClient(create_app(analyzer=Broken())) as client:
@@ -245,11 +246,12 @@ class ApiTests(unittest.TestCase):
         class Blocking:
             analyzer_id = 'blocking-fake'
             analyzer_version = '1'
+            configured_provenance = AnalysisProvenance(analyzer_id, analyzer_version)
             def analyze(self, photo):
                 started.set()
                 if not release.wait(timeout=5):
                     raise RuntimeError('test timed out')
-                return AnalysisOutput(AnalysisOutcome.NO_VISIBLE_FINDINGS)
+                return AnalyzerExecution(AnalysisOutput(AnalysisOutcome.NO_VISIBLE_FINDINGS), self.configured_provenance)
         with TestClient(create_app(analyzer=Blocking())) as client:
             iid, _, pid = self.setup_photo(client)
             with ThreadPoolExecutor(max_workers=1) as pool:
@@ -259,6 +261,7 @@ class ApiTests(unittest.TestCase):
                     state = client.get(f'/inspections/{iid}').json()
                     analysis = state['analyses'][0]
                     self.assertEqual(analysis['status'], 'pending')
+                    self.assertIsNone(analysis['provenance'])
                     self.assertIsNone(analysis['outcome'])
                     self.assertIsNone(analysis['completed_at'])
                     self.assertIsNone(analysis['failure_code'])
@@ -335,3 +338,85 @@ class ApiTests(unittest.TestCase):
             self.assertNotIn('error', response.json())
             edit.assert_not_called()
         self.assertEqual(self.client.get(f'/inspections/{iid}').json(), before)
+
+    def test_real_adapter_offline_workflow_and_review(self):
+        from uuid import UUID
+        from backend.app.images import InMemoryImageSource, prepare_image
+        from backend.app.openai_analyzer import OpenAIPhotoAnalyzer, AnalyzerConfig
+        from test_openai_analyzer import StubClient, response, image_bytes
+        from unittest.mock import patch
+        import socket
+        safe_fields = {'requested_model', 'provider_model', 'prompt_version',
+                       'schema_version', 'preparation_version'}
+        for action in ('confirm', 'edit_and_confirm', 'reject'):
+            with self.subTest(action=action):
+                source, provider = InMemoryImageSource(), StubClient(response())
+                adapter = OpenAIPhotoAnalyzer(source, provider, AnalyzerConfig('synthetic-model'))
+                app = create_app(analyzer=adapter)
+                with patch.object(socket.socket, 'connect', side_effect=AssertionError('network forbidden')), \
+                     TestClient(app) as client:
+                    iid, rid, pid = self.setup_photo(client)
+                    raw = image_bytes()
+                    source.bind(UUID(pid), raw)
+                    state = self.analyze(iid, pid, client)
+                    self.assertEqual(len(provider.calls), 1)
+                    analysis = state['analyses'][0]
+                    self.assertEqual(analysis['status'], 'succeeded')
+                    self.assertEqual(set(analysis['provenance']), safe_fields)
+                    self.assertEqual(analysis['provenance']['requested_model'], 'synthetic-model')
+                    stored = app.state.inspection_service.get_inspection(UUID(iid))
+                    internal = stored.analyses[UUID(analysis['id'])]
+                    prepared = prepare_image(raw)
+                    self.assertEqual(internal.result.provenance.original_sha256, prepared.original_sha256)
+                    self.assertEqual(internal.result.provenance.prepared_sha256, prepared.prepared_sha256)
+                    self.assertNotIn('sha256', str(state))
+                    finding = state['findings'][0]
+                    original = finding['original_proposal']
+                    self.assertEqual(finding['state'], 'pending_review')
+                    self.assertFalse(finding['eligible_for_report'])
+                    self.assertIsNone(finding['review'])
+                    self.assertNotIn('reportable', original)
+                    self.assertEqual(original['evidence_photo_ids'], [pid])
+                    self.assertEqual(finding['source_analysis_id'], analysis['id'])
+                    body = {'action': action}
+                    if action == 'confirm':
+                        body['reportable'] = False
+                    if action == 'edit_and_confirm':
+                        registered = client.post(f'/inspections/{iid}/rooms/{rid}/photos', json={
+                            'original_filename': 'replacement.png', 'declared_media_type': 'image/png'}).json()
+                        replacement = next(p['id'] for p in registered['photos'] if p['id'] != pid)
+                        body.update(category='scuff', surface='wall', location='lower',
+                                    description='Human correction', reportable=True,
+                                    evidence_photo_ids=[replacement])
+                    reviewed = client.post(f"/inspections/{iid}/findings/{finding['id']}/review", json=body)
+                    self.assertEqual(reviewed.status_code, 200)
+                    final = reviewed.json()['findings'][0]
+                    self.assertEqual(final['original_proposal'], original)
+                    self.assertEqual(final['eligible_for_report'], action == 'edit_and_confirm')
+                    self.assertEqual(final['state'], 'rejected' if action == 'reject' else 'confirmed')
+                    if action == 'edit_and_confirm':
+                        self.assertEqual(final['review']['approved']['evidence_photo_ids'], [replacement])
+                    self.assertEqual(len(provider.calls), 1)
+
+    def test_real_adapter_failures_expose_only_safe_provenance(self):
+        from uuid import UUID
+        from backend.app.images import InMemoryImageSource
+        from backend.app.openai_analyzer import OpenAIPhotoAnalyzer, AnalyzerConfig
+        from backend.app.inference import AnalyzerContractError
+        from test_openai_analyzer import StubClient, image_bytes
+        for error, code in ((None, 'unreadable_image'), (RuntimeError('private diagnostic'), 'unavailable'),
+                            (AnalyzerContractError('private diagnostic'), 'invalid_response')):
+            source, provider = InMemoryImageSource(), StubClient(error=error)
+            app = create_app(analyzer=OpenAIPhotoAnalyzer(source, provider, AnalyzerConfig('synthetic')))
+            with TestClient(app) as client:
+                iid, _, pid = self.setup_photo(client)
+                if error is not None:
+                    source.bind(UUID(pid), image_bytes())
+                state = self.analyze(iid, pid, client)
+                self.assertFalse(state['findings'])
+                analysis = state['analyses'][0]
+                self.assertEqual(analysis['failure_code'], code)
+                self.assertEqual(analysis['provenance']['requested_model'], 'synthetic')
+                self.assertNotIn('sha256', str(state))
+                self.assertNotIn('private diagnostic', str(state))
+                self.assertEqual(len(provider.calls), 0 if error is None else 1)

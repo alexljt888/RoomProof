@@ -86,9 +86,11 @@ omitted evidence IDs or explicit `None` retain original proposal evidence;
 an empty list is invalid; supplied IDs resolve to registered same-room photos.
 The service always constructs a domain snapshot with explicit nonempty evidence.
 
-`inference.py` defines `PhotoAnalyzer`, `AnalysisOutput`, and `ProposedFinding`.
+`inference.py` defines `PhotoAnalyzer`, `AnalyzerExecution`, `AnalysisOutput`, and
+`ProposedFinding`. `analyze(photo)` returns one execution containing output and
+immutable provider-neutral provenance.
 The boundary has no review status, approved content, or reportability fields.
-`FakePhotoAnalyzer` returns an explicitly configured output or raises an
+`FakePhotoAnalyzer` wraps its explicitly configured output with fake provenance or raises an
 `AnalyzerFailure` with a safe code. It is not AI, never reads image bytes, and
 never branches on filenames. Configure one/multiple proposals, no visible
 findings, uncertainty, or a failure code directly.
@@ -271,16 +273,65 @@ validation errors, and schema/semantic violations raise `AnalyzerContractError`
 for existing `invalid_response` handling. Messages are fixed; provider diagnostics
 are not returned. No fallback model or automatic model retry is selected.
 
-`analyze_with_metadata(photo)` performs the same single execution but returns a
-frozen `AnalyzerExecution(output, metadata)`. Use it instead of calling `analyze`
-when provenance is needed, not afterward (which would run a second analysis).
-Metadata contains analyzer/model identifiers, prompt/schema versions and SHA-256,
-preparation version, and original/prepared image hashes. The schema hash identifies
-the canonical Pydantic JSON schema, not the SDK's transformed wire schema. Exact
-prompt/schema definitions are versioned in source. There is no mutable last-result
-state; metadata is not persisted into `Analysis` yet. Failed calls raise safe errors
-and do not return execution metadata; Step 3 must capture configured provenance
-when reserving an attempt. Image hashes remain private if exported later.
+`analyze(photo)` is the only execution method and returns the provider-neutral
+`AnalyzerExecution(output, provenance)` from `inference.py`. The former separate
+metadata execution method has been removed. Output and provenance describe the
+same invocation; there is no mutable last-result state.
+
+## Phase 3 Step 3: application integration and provenance
+
+`AnalysisProvenance` is a frozen domain value containing analyzer identity/version,
+optional requested/reported model, prompt/schema versions and SHA-256, preparation
+version, and original/prepared image hashes. SHA-256 values use lowercase hex;
+prompt/schema versions require their hashes, and image hashes occur together with
+a preparation version. No image bytes, prompts, raw responses, secrets, SDK objects,
+or exception details belong in this value. The schema hash identifies canonical
+Pydantic schema, not necessarily the SDK-transformed wire schema.
+
+The service captures one analyzer reference and its `configured_provenance` before
+reserving an `Analysis`. Reservation stores immutable `attempt_provenance`. Inference
+runs outside the repository lock exactly once. Completion validates the execution
+and stores `AnalysisResult.provenance`, outcome, and all pending-review findings in
+one repository update. Invalid output or provenance rolls back the whole completion.
+Analyzer identity and all populated configured fields must agree with final provenance.
+For direct domain callers, omitted attempt provenance defaults to identity-only;
+the application always supplies its configured snapshot explicitly.
+
+Safe failures retain available provenance and no findings. Image preparation failures
+retain configuration; successful preparation adds both image hashes. Invalid or
+contradictory failure provenance is discarded in favor of the reservation snapshot,
+without changing the safe failure classification. Unexpected exceptions also use
+that snapshot. A configured preparation version does not prove preparation completed,
+and an unavailable failure does not prove the remote provider received a request.
+Retries remain explicit new application attempts. Terminal results remain one-shot.
+
+The default fake returns deterministic identity-only provenance with no invented
+model, prompt, or image information. The real adapter remains injected through
+`create_app(analyzer=...)`; no real client or key is created/loaded by default.
+Tests register Photo metadata through HTTP, bind generated PNG bytes internally to
+the returned UUID using the same `InMemoryImageSource`, and analyze through the
+existing endpoint. Photo remains metadata-only; there is no upload endpoint.
+
+HTTP analyses expose `provenance: null` while pending. Terminal responses select only
+`requested_model`, `provider_model`, `prompt_version`, `schema_version`, and
+`preparation_version`. Existing analyzer identity fields remain. All hashes stay
+internal. Human review, reportability, original evidence, approved evidence, and
+source-analysis links are unchanged. In-memory provenance is not durable storage.
+
+`AnalyzerConfig.max_prepared_image_bytes` accepts a positive integer or `None`.
+`None` disables the provider-specific bound for this offline stage; Step 1's generic
+32 MiB output limit still applies. The adapter checks a supplied bound after image
+preparation and before base64 allocation or provider invocation. Rejection returns
+`unreadable_image` with preparation provenance. Base64 adds roughly one third to the
+image size, before JSON/prompt/schema overhead. Step 4 real composition must select
+and explicitly supply a provider/model-appropriate bound using current documentation;
+no numerical provider limit has been guessed. Step 1 policy is unchanged.
+
+The permanent SDK compatibility regression uses OpenAI 3.8.0 with HTTPX2
+`MockTransport`, a synthetic placeholder credential, and blocked socket connections.
+It covers structured parsing/request construction and one transport attempt for a
+retryable failure despite retries on the caller's client. Other tests use injected
+stubs and memory-only synthetic images. No real provider smoke test has occurred.
 
 Normal tests use generated in-memory images and injected clients. They need no
 API key, private images, or network. OpenAI 3.8.0 adds HTTPX2 transitively; with it

@@ -1,6 +1,6 @@
 """Independent domain objects. AI proposes; only an explicit human action approves."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from enum import StrEnum
 from uuid import UUID, uuid4
@@ -182,8 +182,56 @@ class Photo:
 
 
 @dataclass(frozen=True)
+class AnalysisProvenance:
+    """Immutable identifiers only; no provider payloads or image content."""
+    analyzer_id: str
+    analyzer_version: str
+    requested_model: str | None = None
+    provider_model: str | None = None
+    prompt_version: str | None = None
+    prompt_sha256: str | None = None
+    schema_version: str | None = None
+    schema_sha256: str | None = None
+    preparation_version: str | None = None
+    original_sha256: str | None = None
+    prepared_sha256: str | None = None
+
+    def __post_init__(self):
+        _text(self.analyzer_id, "analyzer_id")
+        _text(self.analyzer_version, "analyzer_version")
+        for item in fields(self):
+            value = getattr(self, item.name)
+            if value is not None:
+                _text(value, item.name)
+                if item.name.endswith("sha256") and (
+                    len(value) != 64 or any(c not in "0123456789abcdef" for c in value)
+                ):
+                    raise InvalidDomainData("invalid SHA-256")
+        for prefix in ("prompt", "schema"):
+            if (getattr(self, prefix + "_version") is None) != (getattr(self, prefix + "_sha256") is None):
+                raise InvalidDomainData("version and hash must occur together")
+        if (self.original_sha256 is None) != (self.prepared_sha256 is None):
+            raise InvalidDomainData("image hashes must occur together")
+        if self.prepared_sha256 is not None and self.preparation_version is None:
+            raise InvalidDomainData("image hashes require preparation version")
+
+    def validated(self) -> "AnalysisProvenance":
+        try:
+            return AnalysisProvenance(**{f.name: getattr(self, f.name) for f in fields(AnalysisProvenance)})
+        except (AttributeError, TypeError):
+            raise InvalidDomainData("invalid provenance shape") from None
+
+    def extends(self, configured: "AnalysisProvenance") -> None:
+        for item in fields(configured):
+            value = getattr(configured, item.name)
+            if value is not None and getattr(self, item.name) != value:
+                raise InvalidDomainData("provenance contradicts reservation")
+
+
+@dataclass(frozen=True)
 class AnalysisResult:
     status: AnalysisStatus
+    provenance: AnalysisProvenance
     outcome: AnalysisOutcome | None = None
     limitations: tuple[str, ...] = ()
     failure_code: FailureCode | None = None
@@ -191,6 +239,8 @@ class AnalysisResult:
 
     def __post_init__(self):
         _type(self.status, AnalysisStatus, "status")
+        _type(self.provenance, AnalysisProvenance, "provenance")
+        object.__setattr__(self, "provenance", self.provenance.validated())
         object.__setattr__(self, "limitations", _collection(self.limitations, "limitations"))
         for limitation in self.limitations:
             _text(limitation, "limitation")
@@ -211,6 +261,7 @@ class Analysis:
     photo: Photo
     analyzer_id: str
     analyzer_version: str
+    attempt_provenance: AnalysisProvenance | None = None
     id: UUID = field(default_factory=uuid4, init=False)
     created_at: datetime = field(default_factory=_now, init=False)
     _result: AnalysisResult | None = field(default=None, init=False, repr=False, compare=False)
@@ -219,6 +270,19 @@ class Analysis:
         _type(self.photo, Photo, "photo")
         _text(self.analyzer_id, "analyzer_id")
         _text(self.analyzer_version, "analyzer_version")
+        configured = self.attempt_provenance
+        if configured is None:
+            configured = AnalysisProvenance(self.analyzer_id, self.analyzer_version)
+        object.__setattr__(self, "attempt_provenance", self.validate_provenance(configured))
+
+    def validate_provenance(self, provenance: AnalysisProvenance) -> AnalysisProvenance:
+        _type(provenance, AnalysisProvenance, "provenance")
+        validated = provenance.validated()
+        if (validated.analyzer_id, validated.analyzer_version) != (self.analyzer_id, self.analyzer_version):
+            raise InvalidDomainData("analyzer identity mismatch")
+        if self.attempt_provenance is not None:
+            validated.extends(self.attempt_provenance)
+        return validated
 
     @property
     def photo_id(self) -> UUID:
@@ -241,11 +305,14 @@ class Analysis:
             raise TransitionConflict("analysis already completed")
         object.__setattr__(self, "_result", result)
 
-    def complete(self, outcome: AnalysisOutcome, limitations: tuple[str, ...] = ()) -> None:
-        self._finish(AnalysisResult(AnalysisStatus.SUCCEEDED, outcome, limitations))
+    def complete(self, outcome: AnalysisOutcome, limitations: tuple[str, ...] = (),
+                 *, provenance: AnalysisProvenance | None = None) -> None:
+        final = self.validate_provenance(provenance if provenance is not None else self.attempt_provenance)
+        self._finish(AnalysisResult(AnalysisStatus.SUCCEEDED, final, outcome, limitations))
 
-    def fail(self, code: FailureCode) -> None:
-        self._finish(AnalysisResult(AnalysisStatus.FAILED, failure_code=code))
+    def fail(self, code: FailureCode, *, provenance: AnalysisProvenance | None = None) -> None:
+        final = self.validate_provenance(provenance if provenance is not None else self.attempt_provenance)
+        self._finish(AnalysisResult(AnalysisStatus.FAILED, final, failure_code=code))
 
 
 @dataclass(frozen=True)

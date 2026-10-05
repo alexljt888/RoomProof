@@ -3,10 +3,10 @@ from threading import Barrier, Event
 import unittest
 from uuid import uuid4
 
-from backend.app.domain import (AnalysisOutcome, AnalysisStatus, Category, Certainty,
+from backend.app.domain import (AnalysisProvenance, AnalysisOutcome, AnalysisStatus, Category, Certainty,
                                FailureCode, FindingState, InvalidDomainData,
                                PropertyDetails, Surface, TransitionConflict)
-from backend.app.inference import AnalysisOutput, AnalyzerFailure, FakePhotoAnalyzer, ProposedFinding
+from backend.app.inference import AnalyzerExecution, AnalysisOutput, AnalyzerFailure, FakePhotoAnalyzer, ProposedFinding
 from backend.app.repository import InMemoryInspectionRepository, NotFound
 from backend.app.services import InspectionService
 
@@ -90,6 +90,7 @@ class ServiceTests(unittest.TestCase):
         class Broken:
             analyzer_id = "broken"
             analyzer_version = "1"
+            configured_provenance = AnalysisProvenance(analyzer_id, analyzer_version)
             def analyze(self, photo):
                 raise RuntimeError("synthetic private provider diagnostic")
         self.service.analyzer = Broken()
@@ -166,11 +167,12 @@ class ServiceTests(unittest.TestCase):
         class Blocking:
             analyzer_id = "blocking-fake"
             analyzer_version = "1"
+            configured_provenance = AnalysisProvenance(analyzer_id, analyzer_version)
             def analyze(self, photo):
                 started.set()
                 if not release.wait(timeout=5):
                     raise RuntimeError("test release timed out")
-                return AnalysisOutput(AnalysisOutcome.NO_VISIBLE_FINDINGS)
+                return AnalyzerExecution(AnalysisOutput(AnalysisOutcome.NO_VISIBLE_FINDINGS), self.configured_provenance)
         self.service.analyzer = Blocking()
         with ThreadPoolExecutor(max_workers=2) as pool:
             first = pool.submit(self.analyze)
@@ -191,6 +193,7 @@ class ServiceTests(unittest.TestCase):
         class WrongType:
             analyzer_id = "wrong-type"
             analyzer_version = "1"
+            configured_provenance = AnalysisProvenance(analyzer_id, analyzer_version)
             def analyze(self, photo):
                 return {"outcome": "synthetic private invalid object"}
         self.service.analyzer = WrongType()
@@ -205,6 +208,7 @@ class ServiceTests(unittest.TestCase):
         class InvalidConstruction:
             analyzer_id = "invalid-construction"
             analyzer_version = "1"
+            configured_provenance = AnalysisProvenance(analyzer_id, analyzer_version)
             def analyze(self, photo):
                 return AnalysisOutput(AnalysisOutcome.FINDINGS_PRESENT, findings=None)
         self.service.analyzer = InvalidConstruction()
@@ -218,6 +222,7 @@ class ServiceTests(unittest.TestCase):
         class ExplicitFailure:
             analyzer_id = "explicit-failure"
             analyzer_version = "1"
+            configured_provenance = AnalysisProvenance(analyzer_id, analyzer_version)
             def analyze(self, photo):
                 raise AnalyzerFailure(FailureCode.UNREADABLE_IMAGE)
         self.service.analyzer = ExplicitFailure()
@@ -259,3 +264,103 @@ class ServiceTests(unittest.TestCase):
         self.assertIs(approved.review.approved.evidence_photos[0], stored.photos[self.pid])
         self.assertIs(approved.source_analysis, stored.analyses[approved.source_analysis_id])
         self.assertEqual(len(stored.rooms), 1)
+
+    def test_failure_provenance_and_invalid_success_are_safe(self):
+        from dataclasses import replace
+        from backend.app.inference import AnalyzerContractError
+        configured = AnalysisProvenance('test', '1', requested_model='requested')
+        enriched = replace(configured, provider_model='reported')
+        malformed = replace(configured)
+        object.__setattr__(malformed, 'requested_model', '')
+        for error_type, code in ((AnalyzerContractError, FailureCode.INVALID_RESPONSE),
+                                 (AnalyzerFailure, FailureCode.UNAVAILABLE)):
+            for provenance in (enriched, malformed, {'private': 'data'},
+                               replace(configured, requested_model='contradiction')):
+                with self.subTest(error=error_type, provenance=provenance):
+                    self.setUp()
+                    error = (error_type(provenance=provenance) if error_type is AnalyzerContractError
+                             else error_type(code, provenance=provenance))
+                    # Service must also handle a malformed value assigned after construction.
+                    error.provenance = provenance
+                    class Broken:
+                        configured_provenance = configured
+                        def analyze(self, photo):
+                            raise error
+                    self.service.analyzer = Broken()
+                    state = self.analyze()
+                    analysis = next(iter(state.analyses.values()))
+                    self.assertEqual(analysis.result.failure_code, code)
+                    self.assertEqual(analysis.result.provenance,
+                                     enriched if provenance is enriched else configured)
+                    self.assertFalse(state.findings)
+        for bad in (None, malformed, replace(configured, analyzer_id='different')):
+            self.setUp()
+            execution = AnalyzerExecution(AnalysisOutput(AnalysisOutcome.NO_VISIBLE_FINDINGS), configured)
+            object.__setattr__(execution, 'provenance', bad)
+            class InvalidSuccess:
+                configured_provenance = configured
+                def analyze(self, photo):
+                    return execution
+            self.service.analyzer = InvalidSuccess()
+            state = self.analyze()
+            result = next(iter(state.analyses.values())).result
+            self.assertEqual(result.failure_code, FailureCode.INVALID_RESPONSE)
+            self.assertEqual(result.provenance, configured)
+            self.assertFalse(state.findings)
+
+    def test_captured_analyzer_and_provenance_snapshot(self):
+        from dataclasses import FrozenInstanceError, replace
+        configured = AnalysisProvenance('captured', '1', requested_model='requested')
+        calls = []
+        service = self.service
+        class Swapping:
+            @property
+            def configured_provenance(self):
+                service.analyzer = FakePhotoAnalyzer(FailureCode.UNAVAILABLE)
+                return configured
+            def analyze(self, photo):
+                pending = next(iter(service.get_inspection(service_id).analyses.values()))
+                self_outer.assertEqual(pending.attempt_provenance, configured)
+                self_outer.assertIsNone(pending.result)
+                calls.append(photo.id)
+                return AnalyzerExecution(AnalysisOutput(AnalysisOutcome.NO_VISIBLE_FINDINGS),
+                                         replace(configured, provider_model='reported'))
+        self_outer, service_id = self, self.iid
+        self.service.analyzer = Swapping()
+        state = self.analyze()
+        analysis = next(iter(state.analyses.values()))
+        self.assertEqual(calls, [self.pid])
+        self.assertEqual(analysis.result.provenance.provider_model, 'reported')
+        with self.assertRaises(FrozenInstanceError):
+            analysis.result.provenance.requested_model = 'mutated'
+        object.__setattr__(analysis.result.provenance, 'provider_model', 'mutated snapshot')
+        stored = self.service.get_inspection(self.iid).analyses[analysis.id]
+        self.assertEqual(stored.result.provenance.provider_model, 'reported')
+
+    def test_out_of_order_completions_keep_provenance_separate(self):
+        from dataclasses import replace
+        state = self.service.register_photo(self.iid, self.rid, 'second.png', 'image/png')
+        second = next(pid for pid in state.photos if pid != self.pid)
+        started, release = Event(), Event()
+        first = self.pid
+        class Concurrent:
+            configured_provenance = AnalysisProvenance('concurrent', '1')
+            def analyze(self, photo):
+                if photo.id == first:
+                    started.set()
+                    if not release.wait(3):
+                        raise RuntimeError('test timeout')
+                return AnalyzerExecution(AnalysisOutput(AnalysisOutcome.NO_VISIBLE_FINDINGS),
+                                         replace(self.configured_provenance, provider_model=str(photo.id)))
+        self.service.analyzer = Concurrent()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            waiting = pool.submit(self.analyze)
+            try:
+                self.assertTrue(started.wait(3))
+                completed = self.service.analyze_photo(self.iid, second)
+                self.assertEqual(sum(a.status == AnalysisStatus.SUCCEEDED for a in completed.analyses.values()), 1)
+            finally:
+                release.set()
+            waiting.result(3)
+        for analysis in self.service.get_inspection(self.iid).analyses.values():
+            self.assertEqual(analysis.result.provenance.provider_model, str(analysis.photo_id))

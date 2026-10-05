@@ -79,7 +79,7 @@ class OpenAIAnalyzerTests(unittest.TestCase):
         self.adapter = OpenAIPhotoAnalyzer(self.source, self.client, AnalyzerConfig("explicit-test-model", 12))
 
     def test_request_uses_prepared_pixels_and_no_private_metadata(self):
-        result = self.adapter.analyze(self.photo)
+        result = self.adapter.analyze(self.photo).output
         self.assertEqual(result.outcome, AnalysisOutcome.FINDINGS_PRESENT)
         self.assertEqual(len(self.client.calls), 1)
         request = self.client.calls[0]
@@ -103,7 +103,7 @@ class OpenAIAnalyzerTests(unittest.TestCase):
                             certainty='clear' if i % 2 == 0 else 'possible')
                     for i, c in enumerate(Category) for s in Surface]
         self.client.result = response(payload(findings=findings, limitations=['Glare']))
-        out = self.adapter.analyze(self.photo)
+        out = self.adapter.analyze(self.photo).output
         self.assertEqual(len(out.findings), 40)
         self.assertEqual({f.category for f in out.findings}, set(Category))
         self.assertEqual({f.surface for f in out.findings}, set(Surface))
@@ -119,7 +119,7 @@ class OpenAIAnalyzerTests(unittest.TestCase):
         for outcome, findings in [('no_visible_findings', []), ('uncertain', []),
                                   ('uncertain', [finding(certainty='possible')])]:
             self.client.result = response(payload(outcome, findings))
-            out = self.adapter.analyze(self.photo)
+            out = self.adapter.analyze(self.photo).output
             self.assertEqual(out.outcome.value, outcome)
             self.assertEqual(len(out.findings), len(findings))
 
@@ -142,7 +142,7 @@ class OpenAIAnalyzerTests(unittest.TestCase):
                 adapter = OpenAIPhotoAnalyzer(self.source, client, self.adapter.config)
                 with self.assertRaises(AnalyzerContractError) as raised:
                     adapter.analyze(self.photo)
-                self.assertEqual(str(raised.exception), 'Invalid structured provider response')
+                self.assertEqual(str(raised.exception), 'Invalid analyzer response')
                 self.assertEqual(len(client.calls), 1)
 
     def test_constructed_invalid_model_revalidated(self):
@@ -205,13 +205,13 @@ class OpenAIAnalyzerTests(unittest.TestCase):
         self.client.error = AnalyzerContractError('synthetic private provider detail')
         with self.assertRaises(AnalyzerContractError) as raised:
             self.adapter.analyze(self.photo)
-        self.assertEqual(str(raised.exception), 'Invalid structured provider response')
+        self.assertEqual(str(raised.exception), 'Invalid analyzer response')
         self.assertTrue(raised.exception.__suppress_context__)
         self.assertEqual(len(self.client.calls), 1)
 
     def test_metadata_hashes_and_immutability(self):
-        execution = self.adapter.analyze_with_metadata(self.photo)
-        meta = execution.metadata
+        execution = self.adapter.analyze(self.photo)
+        meta = execution.provenance
         prepared = prepare_image(self.raw)
         self.assertEqual(meta.requested_model, 'explicit-test-model')
         self.assertEqual(meta.provider_model, 'synthetic-reported-model')
@@ -227,7 +227,7 @@ class OpenAIAnalyzerTests(unittest.TestCase):
         self.assertEqual(meta.original_sha256, prepared.original_sha256)
         self.assertEqual(meta.prepared_sha256, prepared.prepared_sha256)
         self.assertEqual(meta.preparation_version, prepared.preparation_version)
-        self.assertEqual(meta, self.adapter.analyze_with_metadata(self.photo).metadata)
+        self.assertEqual(meta, self.adapter.analyze(self.photo).provenance)
         with self.assertRaises(FrozenInstanceError):
             meta.requested_model = 'changed'
         self.assertNotIn(repr(self.raw), repr(execution))
@@ -236,9 +236,9 @@ class OpenAIAnalyzerTests(unittest.TestCase):
 
     def test_provider_model_may_be_absent(self):
         self.client.result = response(model=None)
-        self.assertIsNone(self.adapter.analyze_with_metadata(self.photo).metadata.provider_model)
+        self.assertIsNone(self.adapter.analyze(self.photo).provenance.provider_model)
         del self.client.result.model
-        self.assertIsNone(self.adapter.analyze_with_metadata(self.photo).metadata.provider_model)
+        self.assertIsNone(self.adapter.analyze(self.photo).provenance.provider_model)
 
     def test_concurrent_execution_metadata_is_call_local(self):
         barrier = Barrier(2)
@@ -257,11 +257,11 @@ class OpenAIAnalyzerTests(unittest.TestCase):
         self.source.bind(second.id, second_raw)
         adapter = OpenAIPhotoAnalyzer(self.source, ConcurrentStub(), self.adapter.config)
         with ThreadPoolExecutor(max_workers=2) as pool:
-            results = list(pool.map(adapter.analyze_with_metadata, (self.photo, second)))
+            results = list(pool.map(adapter.analyze, (self.photo, second)))
         for execution, raw in zip(results, (self.raw, second_raw)):
-            self.assertEqual(execution.metadata.original_sha256, hashlib.sha256(raw).hexdigest())
-            self.assertEqual(execution.metadata.provider_model, execution.metadata.prepared_sha256)
-        self.assertNotEqual(results[0].metadata.original_sha256, results[1].metadata.original_sha256)
+            self.assertEqual(execution.provenance.original_sha256, hashlib.sha256(raw).hexdigest())
+            self.assertEqual(execution.provenance.provider_model, execution.provenance.prepared_sha256)
+        self.assertNotEqual(results[0].provenance.original_sha256, results[1].provenance.original_sha256)
 
     def test_configuration_requires_model_and_finite_timeout(self):
         for model in ('', ' ', None):
@@ -272,3 +272,36 @@ class OpenAIAnalyzerTests(unittest.TestCase):
                 AnalyzerConfig('explicit', timeout)
         with self.assertRaises(FrozenInstanceError):
             self.adapter.config.model = 'changed'
+
+    def test_size_bound_before_encoding_retains_preparation(self):
+        from dataclasses import replace
+        prepared = prepare_image(self.raw)
+        for bound in (len(prepared.encoded_bytes), len(prepared.encoded_bytes) + 1):
+            adapter = replace(self.adapter, config=replace(self.adapter.config, max_prepared_image_bytes=bound))
+            self.assertEqual(adapter.analyze(self.photo).provenance.prepared_sha256, prepared.prepared_sha256)
+        client = StubClient(response())
+        adapter = replace(self.adapter, client=client,
+                          config=replace(self.adapter.config, max_prepared_image_bytes=len(prepared.encoded_bytes) - 1))
+        with patch('backend.app.openai_analyzer.base64.b64encode', side_effect=AssertionError('must not encode')):
+            with self.assertRaises(AnalyzerFailure) as raised:
+                adapter.analyze(self.photo)
+        self.assertEqual(raised.exception.code, FailureCode.UNREADABLE_IMAGE)
+        self.assertEqual(raised.exception.provenance.prepared_sha256, prepared.prepared_sha256)
+        self.assertFalse(client.calls)
+        self.assertFalse(client.options)
+        for invalid in (0, -1, True, 1.5, '100'):
+            with self.assertRaises(ValueError):
+                replace(self.adapter.config, max_prepared_image_bytes=invalid)
+
+    def test_failure_provenance_by_stage(self):
+        missing = Photo(self.room, 'missing.png', 'image/png')
+        with self.assertRaises(AnalyzerFailure) as raised:
+            self.adapter.analyze(missing)
+        self.assertEqual(raised.exception.provenance, self.adapter.configured_provenance)
+        for error, expected in ((RuntimeError('private'), AnalyzerFailure),
+                                (AnalyzerContractError('private'), AnalyzerContractError)):
+            self.client.error = error
+            with self.assertRaises(expected) as raised:
+                self.adapter.analyze(self.photo)
+            self.assertEqual(raised.exception.provenance.prepared_sha256, prepare_image(self.raw).prepared_sha256)
+            self.assertIsNone(raised.exception.provenance.provider_model)

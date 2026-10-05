@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from typing import Protocol
 
-from .domain import (AnalysisOutcome, Category, Certainty, FailureCode,
+from .domain import (AnalysisOutcome, AnalysisProvenance, Category, Certainty, FailureCode,
                      InvalidDomainData, Photo, Surface)
 
 
@@ -12,6 +12,17 @@ class AnalyzerContractError(InvalidDomainData):
     Adapters translate output parsing/shape errors into this exception; execution
     failures must not be wrapped in it. Diagnostic text is never persisted.
     """
+
+    def __init__(self, message: str = "Invalid analyzer response", *, provenance=None):
+        self.provenance = _safe_provenance(provenance)
+        super().__init__("Invalid analyzer response")
+
+
+def _safe_provenance(value):
+    try:
+        return value.validated() if type(value) is AnalysisProvenance else None
+    except (InvalidDomainData, AttributeError, TypeError):
+        return None
 
 
 @dataclass(frozen=True)
@@ -47,18 +58,36 @@ class AnalysisOutput:
 
 class AnalyzerFailure(Exception):
     """Only a safe failure code crosses into stored workflow state."""
-    def __init__(self, code: FailureCode):
+    def __init__(self, code: FailureCode, *, provenance=None):
         if not isinstance(code, FailureCode):
             raise InvalidDomainData("invalid analyzer failure code")
+        self.provenance = _safe_provenance(provenance)
         self.code = code
         super().__init__(code.value)
+
+
+@dataclass(frozen=True)
+class AnalyzerExecution:
+    output: AnalysisOutput
+    provenance: AnalysisProvenance
+
+    def __post_init__(self):
+        if type(self.output) is not AnalysisOutput or type(self.provenance) is not AnalysisProvenance:
+            raise AnalyzerContractError()
+        try:
+            object.__setattr__(self, "provenance", self.provenance.validated())
+        except InvalidDomainData:
+            raise AnalyzerContractError() from None
 
 
 class PhotoAnalyzer(Protocol):
     analyzer_id: str
     analyzer_version: str
 
-    def analyze(self, photo: Photo) -> AnalysisOutput: ...
+    @property
+    def configured_provenance(self) -> AnalysisProvenance: ...
+
+    def analyze(self, photo: Photo) -> AnalyzerExecution: ...
 
 
 @dataclass(frozen=True)
@@ -72,7 +101,11 @@ class FakePhotoAnalyzer:
         if not isinstance(self.scenario, (AnalysisOutput, FailureCode)):
             raise InvalidDomainData("fake requires an output or failure code")
 
-    def analyze(self, photo: Photo) -> AnalysisOutput:
+    @property
+    def configured_provenance(self) -> AnalysisProvenance:
+        return AnalysisProvenance(self.analyzer_id, self.analyzer_version)
+
+    def analyze(self, photo: Photo) -> AnalyzerExecution:
         if isinstance(self.scenario, FailureCode):
-            raise AnalyzerFailure(self.scenario)
-        return self.scenario
+            raise AnalyzerFailure(self.scenario, provenance=self.configured_provenance)
+        return AnalyzerExecution(self.scenario, self.configured_provenance)

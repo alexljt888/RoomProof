@@ -1,6 +1,6 @@
 """Injected OpenAI adapter; no client creation, environment loading, or app wiring."""
 import base64
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import hashlib
 import json
 import math
@@ -10,9 +10,9 @@ from openai import (APIResponseValidationError, ContentFilterFinishReasonError,
                     LengthFinishReasonError, OpenAI)
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator, ValidationError
 
-from .domain import AnalysisOutcome, Category, Certainty, FailureCode, Photo, Surface
-from .images import ImageError, ImageSource, prepare_image
-from .inference import AnalysisOutput, AnalyzerContractError, AnalyzerFailure, ProposedFinding
+from .domain import AnalysisOutcome, AnalysisProvenance, Category, Certainty, FailureCode, Photo, Surface
+from .images import ImageError, ImageSource, PREPARATION_VERSION, prepare_image
+from .inference import AnalysisOutput, AnalyzerExecution, AnalyzerContractError, AnalyzerFailure, ProposedFinding
 
 ANALYZER_ID = "openai-photo"
 ANALYZER_VERSION = "1"
@@ -87,34 +87,18 @@ SCHEMA_SHA256 = hashlib.sha256(json.dumps(
 class AnalyzerConfig:
     model: str
     timeout_seconds: float = 90.0
+    max_prepared_image_bytes: int | None = None
 
     def __post_init__(self):
+        if self.max_prepared_image_bytes is not None and (
+            type(self.max_prepared_image_bytes) is not int or self.max_prepared_image_bytes <= 0
+        ):
+            raise ValueError("Image byte bound must be a positive integer")
         if not isinstance(self.model, str) or not self.model.strip():
             raise ValueError("Explicit model identifier required")
         if (type(self.timeout_seconds) not in (int, float)
                 or not math.isfinite(self.timeout_seconds) or self.timeout_seconds <= 0):
             raise ValueError("Timeout must be positive and finite")
-
-
-@dataclass(frozen=True)
-class ExecutionMetadata:
-    analyzer_id: str
-    analyzer_version: str
-    requested_model: str
-    provider_model: str | None
-    prompt_version: str
-    prompt_sha256: str
-    schema_version: str
-    schema_sha256: str
-    preparation_version: str
-    original_sha256: str
-    prepared_sha256: str
-
-
-@dataclass(frozen=True)
-class AnalyzerExecution:
-    output: AnalysisOutput
-    metadata: ExecutionMetadata
 
 
 @dataclass(frozen=True)
@@ -125,15 +109,29 @@ class OpenAIPhotoAnalyzer:
     analyzer_id: str = field(default=ANALYZER_ID, init=False)
     analyzer_version: str = field(default=ANALYZER_VERSION, init=False)
 
-    def analyze(self, photo: Photo) -> AnalysisOutput:
-        return self.analyze_with_metadata(photo).output
+    @property
+    def configured_provenance(self) -> AnalysisProvenance:
+        return AnalysisProvenance(
+            self.analyzer_id, self.analyzer_version, self.config.model,
+            prompt_version=PROMPT_VERSION, prompt_sha256=PROMPT_SHA256,
+            schema_version=SCHEMA_VERSION, schema_sha256=SCHEMA_SHA256,
+            preparation_version=PREPARATION_VERSION,
+        )
 
-    def analyze_with_metadata(self, photo: Photo) -> AnalyzerExecution:
-        """One execution, with call-local provenance; no mutable last-result state."""
+    def analyze(self, photo: Photo) -> AnalyzerExecution:
+        """One execution returns output and immutable call-local provenance."""
+        provenance = self.configured_provenance
         try:
             prepared = prepare_image(self.image_source.read(photo.id))
         except ImageError:
-            raise AnalyzerFailure(FailureCode.UNREADABLE_IMAGE) from None
+            raise AnalyzerFailure(FailureCode.UNREADABLE_IMAGE, provenance=provenance) from None
+
+        provenance = replace(provenance, original_sha256=prepared.original_sha256,
+                             prepared_sha256=prepared.prepared_sha256,
+                             preparation_version=prepared.preparation_version)
+        bound = self.config.max_prepared_image_bytes
+        if bound is not None and len(prepared.encoded_bytes) > bound:
+            raise AnalyzerFailure(FailureCode.UNREADABLE_IMAGE, provenance=provenance)
 
         try:
             # Copies SDK options without mutating the caller's client. Client and
@@ -151,9 +149,9 @@ class OpenAIPhotoAnalyzer:
             )
         except (AnalyzerContractError, ValidationError, json.JSONDecodeError, APIResponseValidationError,
                 LengthFinishReasonError, ContentFilterFinishReasonError):
-            raise AnalyzerContractError("Invalid structured provider response") from None
+            raise AnalyzerContractError(provenance=provenance) from None
         except Exception:
-            raise AnalyzerFailure(FailureCode.UNAVAILABLE) from None
+            raise AnalyzerFailure(FailureCode.UNAVAILABLE, provenance=provenance) from None
 
         try:
             if response.status != "completed":
@@ -170,6 +168,7 @@ class OpenAIPhotoAnalyzer:
             model = getattr(response, "model", None)
             if model is not None and (not isinstance(model, str) or not model.strip()):
                 raise ValueError("Invalid model identifier")
+            provenance = replace(provenance, provider_model=model)
             output = AnalysisOutput(
                 AnalysisOutcome(validated.outcome),
                 tuple(ProposedFinding(Category(f.category), Surface(f.surface),
@@ -178,9 +177,5 @@ class OpenAIPhotoAnalyzer:
                 tuple(validated.limitations),
             )
         except Exception:
-            raise AnalyzerContractError("Invalid structured provider response") from None
-        return AnalyzerExecution(output, ExecutionMetadata(
-            self.analyzer_id, self.analyzer_version, self.config.model, model,
-            PROMPT_VERSION, PROMPT_SHA256, SCHEMA_VERSION, SCHEMA_SHA256,
-            prepared.preparation_version, prepared.original_sha256, prepared.prepared_sha256,
-        ))
+            raise AnalyzerContractError(provenance=provenance) from None
+        return AnalyzerExecution(output, provenance)

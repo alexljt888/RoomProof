@@ -1,11 +1,11 @@
 """Inspection workflows. No HTTP, storage, authentication, or real inference."""
 from uuid import UUID
 
-from .domain import (Analysis, AnalysisStatus, ApprovedContent, Category, Finding,
+from .domain import (Analysis, AnalysisProvenance, AnalysisStatus, ApprovedContent, Category, Finding,
                      FindingProposal, FindingState, FailureCode, Inspection,
                      InvalidDomainData, Photo, PropertyDetails, Room, Surface,
                      TransitionConflict)
-from .inference import AnalysisOutput, AnalyzerContractError, AnalyzerFailure, PhotoAnalyzer
+from .inference import AnalysisOutput, AnalyzerExecution, AnalyzerContractError, AnalyzerFailure, PhotoAnalyzer
 from .repository import InspectionRepository, InspectionState, lookup
 
 
@@ -41,6 +41,11 @@ class InspectionService:
 
     def analyze_photo(self, inspection_id: UUID, photo_id: UUID) -> InspectionState:
         analysis_id = None
+        analyzer = self.analyzer
+        configured = analyzer.configured_provenance
+        if type(configured) is not AnalysisProvenance:
+            raise InvalidDomainData("configured provenance required")
+        configured = configured.validated()
 
         def reserve(state):
             nonlocal analysis_id
@@ -48,29 +53,33 @@ class InspectionService:
             if any(a.photo_id == photo_id and a.status != AnalysisStatus.FAILED
                    for a in state.analyses.values()):
                 raise TransitionConflict("photo analysis is pending or already succeeded")
-            analysis = Analysis(photo, self.analyzer.analyzer_id, self.analyzer.analyzer_version)
+            analysis = Analysis(photo, configured.analyzer_id, configured.analyzer_version, configured)
             analysis_id = analysis.id
             state.analyses[analysis.id] = analysis
 
         reserved = self.repository.update(inspection_id, reserve)
         # No repository lock is held during analyzer execution. Input is a copy.
         try:
-            output = self.analyzer.analyze(reserved.photos[photo_id])
-        except AnalyzerContractError:
-            return self._fail_analysis(inspection_id, analysis_id, FailureCode.INVALID_RESPONSE)
+            execution = analyzer.analyze(reserved.photos[photo_id])
+        except AnalyzerContractError as exc:
+            return self._fail_analysis(inspection_id, analysis_id, FailureCode.INVALID_RESPONSE, getattr(exc, "provenance", None))
         except AnalyzerFailure as exc:
-            return self._fail_analysis(inspection_id, analysis_id, exc.code)
+            return self._fail_analysis(inspection_id, analysis_id, exc.code, getattr(exc, "provenance", None))
         except Exception:
             # Never store provider exception messages, credentials, or tracebacks.
             return self._fail_analysis(inspection_id, analysis_id, FailureCode.UNAVAILABLE)
 
         def complete(state):
             analysis = lookup(state.analyses, analysis_id)
+            if type(execution) is not AnalyzerExecution:
+                raise InvalidDomainData("analyzer must return AnalyzerExecution")
+            output = execution.output
             if type(output) is not AnalysisOutput:
                 raise InvalidDomainData("analyzer must return AnalysisOutput")
             # Revalidate the boundary, then build everything on a private copy.
             validated = AnalysisOutput(output.outcome, output.findings, output.limitations)
-            analysis.complete(validated.outcome, validated.limitations)
+            provenance = analysis.validate_provenance(execution.provenance)
+            analysis.complete(validated.outcome, validated.limitations, provenance=provenance)
             findings = []
             for proposed in validated.findings:
                 proposal = FindingProposal(
@@ -83,12 +92,18 @@ class InspectionService:
 
         try:
             return self.repository.update(inspection_id, complete)
-        except InvalidDomainData:
-            return self._fail_analysis(inspection_id, analysis_id, FailureCode.INVALID_RESPONSE)
+        except (InvalidDomainData, AttributeError, TypeError):
+            return self._fail_analysis(inspection_id, analysis_id, FailureCode.INVALID_RESPONSE,
+                                       getattr(execution, "provenance", None) if type(execution) is AnalyzerExecution else None)
 
-    def _fail_analysis(self, inspection_id, analysis_id, code) -> InspectionState:
+    def _fail_analysis(self, inspection_id, analysis_id, code, provenance=None) -> InspectionState:
         def fail(state):
-            lookup(state.analyses, analysis_id).fail(code)
+            analysis = lookup(state.analyses, analysis_id)
+            try:
+                final = analysis.validate_provenance(provenance)
+            except (InvalidDomainData, AttributeError, TypeError):
+                final = analysis.attempt_provenance
+            analysis.fail(code, provenance=final)
         return self.repository.update(inspection_id, fail)
 
     def confirm_finding(self, inspection_id: UUID, finding_id: UUID,

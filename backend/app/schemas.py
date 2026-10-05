@@ -86,7 +86,16 @@ class PhotoResponse(BaseModel):
     capture_surface_hint: Surface | None
 
 
+class ProvenanceResponse(BaseModel):
+    requested_model: str | None
+    provider_model: str | None
+    prompt_version: str | None
+    schema_version: str | None
+    preparation_version: str | None
+
+
 class AnalysisResponse(BaseModel):
+    provenance: ProvenanceResponse | None
     id: UUID
     inspection_id: UUID
     photo_id: UUID
@@ -191,6 +200,13 @@ def inspection_response(state: InspectionState) -> InspectionResponse:
             completed_at=result.completed_at if result else None,
             limitations=list(result.limitations) if result else [],
             failure_code=result.failure_code if result else None,
+            provenance=ProvenanceResponse(
+                requested_model=result.provenance.requested_model,
+                provider_model=result.provenance.provider_model,
+                prompt_version=result.provenance.prompt_version,
+                schema_version=result.provenance.schema_version,
+                preparation_version=result.provenance.preparation_version,
+            ) if result else None,
         ))
     findings = []
     for finding in state.findings.values():
