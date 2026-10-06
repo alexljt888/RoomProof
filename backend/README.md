@@ -394,3 +394,43 @@ outcomes. It does not establish model accuracy. Findings remain pending review,
 with no AI approval or reportability decision. Exit 1 means analysis/setup could
 not complete; exit 2 means missing configuration or invalid local input. No durable
 persistence or production deployment is introduced.
+
+## Phase 4 Step 2: transient browser photo content
+
+The original seven JSON operations remain compatible. Two scoped content routes
+now bind browser bytes without changing Photo domain metadata:
+
+- `PUT /inspections/{inspection_id}/photos/{photo_id}/content`: raw JPEG/PNG
+  request body; success 204. Verify ownership, bound streaming input to 20 MiB,
+  validate with `prepare_image`, then bind original bytes once. Invalid input
+  returns safe 422; input/storage limits 413; replacement 409; wrong scope 404.
+  Invalid uploads leave the registered UUID available for a corrected upload.
+- `GET` at the same path: sanitized `image/png`, `Cache-Control: no-store`, and
+  `X-Content-Type-Options: nosniff`. Missing content returns safe 404. Original
+  EXIF and other metadata are never served. Error bodies use safe `detail`
+  code/message objects, alongside the existing JSON API error formats.
+
+`InMemoryImageSource` enforces a 100 MiB aggregate encoded-byte bound per app
+instance under its binding lock, in addition to existing per-image limits.
+Transient preparation/request buffers also consume memory; this is not a total
+process-memory quota or production storage. Nothing writes images to disk.
+`create_app(image_source=...)` can inject a smaller-capacity source for testing.
+An analyzer exposing `image_source` shares that exact source automatically;
+supplying a different upload source is rejected. Future storage can replace
+read/bind behavior without putting storage details into the Photo domain.
+
+The default factory still uses the offline fake and needs no key. Explicit real
+adapter injection remains available as in Phase 3, but no production provider
+configuration or automatic real execution has been added. Content upload does
+not invoke analysis. Browser analysis buttons require loaded content; legacy
+metadata-only fake API callers remain compatible.
+
+Run locally with one process (avoid reload when retaining in-memory inspections):
+
+```sh
+backend/.venv/bin/python -m uvicorn backend.app.main:create_app --factory --host 127.0.0.1 --port 8000
+```
+
+Run Vite separately as documented in `frontend/README.md`. These local servers
+have no authentication and must not be publicly exposed. Server restart loses
+all state and image bytes; no durable persistence, S3, or deployment exists.

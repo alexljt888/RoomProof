@@ -285,7 +285,7 @@ class ApiTests(unittest.TestCase):
     def test_openapi_has_seven_workflow_operations_and_review_discriminator(self):
         schema = self.client.get('/openapi.json').json()
         operations = [(path, method) for path, methods in schema['paths'].items()
-                      for method in methods if method in ('get', 'post')]
+                      for method in methods if method in ('get', 'post') and not path.endswith('/content')]
         self.assertEqual(len(operations), 7)
         review = schema['paths']['/inspections/{inspection_id}/findings/{finding_id}/review']['post']
         body = review['requestBody']['content']['application/json']['schema']

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router";
 import type { InspectionApi, Inspection, InspectionSummary } from "./api/types";
+import { PhotoTile } from "./components/PhotoTile";
 import { Badge, Evidence, FindingCard } from "./components/FindingCard";
 function ErrorMessage({ message }: { message: string }) {
   return message ? (
@@ -66,7 +67,11 @@ function Home({ api }: { api: InspectionApi }) {
             <span className="eyebrow">Pick up where you left off</span>
             <h2>Your inspections</h2>
           </div>
-          <span className="caption">Demo session · resets on refresh</span>
+          <span className="caption">
+            {api.mode === "http"
+              ? "Local backend · resets on server restart"
+              : "Demo session · resets on refresh"}
+          </span>
         </div>
         <ErrorMessage message={error} />
         <div className="inspection-grid">
@@ -165,8 +170,9 @@ function NewInspection({ api }: { api: InspectionApi }) {
           <input name="unit" placeholder="Apartment or unit number" />
         </label>
         <p className="caption">
-          Demo only. Your entries stay in this browser session and disappear on
-          refresh.
+          {api.mode === "http"
+            ? "Local development only. Entries are lost when the backend restarts."
+            : "Demo only. Entries disappear on refresh."}
         </p>
         <ErrorMessage message={error} />
         <button disabled={busy}>
@@ -187,6 +193,102 @@ function Workspace({ api }: { api: InspectionApi }) {
   const [roomName, setRoomName] = useState("");
   const [analyzing, setAnalyzing] = useState("");
   const mutationInFlight = useRef(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const retryPhoto = useRef<string | null>(null);
+  const [uploading, setUploading] = useState("");
+  const [contentVersion, setContentVersion] = useState(0);
+  const [needsRefresh, setNeedsRefresh] = useState(false);
+  async function selectFile(file?: File) {
+    if (!file || !state || !api.content || mutationInFlight.current) return;
+    if (!["image/jpeg", "image/png"].includes(file.type)) {
+      setError(
+        "RoomProof currently accepts JPEG/PNG only. HEIC is not supported.",
+      );
+      return;
+    }
+    if (file.size > 20971520) {
+      setError("Choose an image no larger than 20 MiB.");
+      return;
+    }
+    mutationInFlight.current = true;
+    setBusy(true);
+    setError("");
+    let pid = retryPhoto.current;
+    try {
+      if (!pid) {
+        const next = await api.registerPhoto(state.id, room, {
+          original_filename: file.name,
+          declared_media_type: file.type,
+        });
+        // The backend appends this Photo under its repository lock and returns
+        // that detached, insertion-ordered snapshot. A stale UI set difference
+        // may include OTHER clients' earlier registrations; never select those.
+        const registered = next.photos.at(-1);
+        if (
+          !registered ||
+          registered.room_id !== room ||
+          registered.inspection_id !== state.id ||
+          state.photos.some((p) => p.id === registered.id)
+        ) {
+          throw new Error("Photo registration could not be identified safely.");
+        }
+        pid = registered.id;
+        setState(next);
+      }
+      setTab("photos");
+      setUploading(pid);
+      await api.content.upload(state.id, pid, file);
+      setState(await api.get(state.id));
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Photo upload failed. Choose the file again to retry.",
+      );
+    } finally {
+      setUploading("");
+      setContentVersion((v) => v + 1);
+      setBusy(false);
+      mutationInFlight.current = false;
+      retryPhoto.current = null;
+    }
+  }
+  async function analyzePhoto(pid: string) {
+    if (!state || mutationInFlight.current || needsRefresh) return;
+    mutationInFlight.current = true;
+    setBusy(true);
+    setAnalyzing(pid);
+    setError("");
+    try {
+      const next = await api.analyze(state.id, pid);
+      setState(next);
+      if (
+        next.analyses.filter((a) => a.photo_id === pid).at(-1)?.status ===
+        "failed"
+      ) {
+        setState(await api.get(state.id));
+        setError(
+          "Analysis failed. State refreshed; no automatic retry was made.",
+        );
+      }
+    } catch {
+      try {
+        setState(await api.get(state.id));
+        setError(
+          "Analysis did not complete normally. State refreshed; check its status before retrying.",
+        );
+      } catch {
+        setNeedsRefresh(true);
+        setError(
+          "Analysis status is unknown. Refresh state before another attempt.",
+        );
+      }
+    } finally {
+      mutationInFlight.current = false;
+      setBusy(false);
+      setAnalyzing("");
+    }
+  }
   useEffect(() => {
     let active = true;
     api
@@ -280,6 +382,32 @@ function Workspace({ api }: { api: InspectionApi }) {
         </div>
       </div>
       <ErrorMessage message={error} />
+      {needsRefresh && (
+        <button
+          disabled={busy}
+          onClick={() =>
+            void update(async () => {
+              const next = await api.get(state.id);
+              setNeedsRefresh(false);
+              return next;
+            })
+          }
+        >
+          Refresh analysis state
+        </button>
+      )}
+      <input
+        ref={fileInput}
+        type="file"
+        accept="image/jpeg,image/png"
+        hidden
+        aria-label="Choose room photo"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          void selectFile(file);
+        }}
+      />
       <div className="workspace">
         <aside>
           <div className="row">
@@ -348,7 +476,12 @@ function Workspace({ api }: { api: InspectionApi }) {
               <button
                 className="secondary"
                 disabled={busy}
-                onClick={() =>
+                onClick={() => {
+                  if (api.content) {
+                    retryPhoto.current = null;
+                    fileInput.current?.click();
+                    return;
+                  }
                   void update(async () => {
                     const next = await api.registerPhoto(state.id, room, {
                       original_filename: "illustrated-demo.png",
@@ -356,10 +489,10 @@ function Workspace({ api }: { api: InspectionApi }) {
                     });
                     setTab("photos");
                     return next;
-                  })
-                }
+                  });
+                }}
               >
-                + Add demo photo
+                {api.content ? "+ Add Photo" : "+ Add demo photo"}
               </button>
             )}
           </div>
@@ -382,8 +515,9 @@ function Workspace({ api }: { api: InspectionApi }) {
           {tab === "photos" && (
             <>
               <p className="caption">
-                Illustrated examples only. No files are uploaded and no AI runs
-                in this demo.
+                {api.content
+                  ? "Local workflow · default backend uses fake analysis. Review every suggestion."
+                  : "Illustrated examples only. No uploads or AI in this demo."}
               </p>
               {!photos.length ? (
                 <div className="empty card">
@@ -391,7 +525,9 @@ function Workspace({ api }: { api: InspectionApi }) {
                   <h3>A fresh canvas.</h3>
                   <p>
                     {current
-                      ? "Add a demo photo to explore the review experience."
+                      ? api.content
+                        ? "Add a JPEG/PNG photo to document this room."
+                        : "Add a demo photo to explore the review experience."
                       : "Create a room to begin documenting your space."}
                   </p>
                 </div>
@@ -401,6 +537,25 @@ function Workspace({ api }: { api: InspectionApi }) {
                     const a = state.analyses
                       .filter((a) => a.photo_id === p.id)
                       .at(-1);
+                    if (api.content)
+                      return (
+                        <PhotoTile
+                          key={`${p.id}-${contentVersion}`}
+                          photo={p}
+                          index={index}
+                          content={api.content}
+                          analysis={a}
+                          busy={busy || needsRefresh}
+                          uploading={uploading === p.id}
+                          analyzing={analyzing === p.id}
+                          onAnalyze={() => void analyzePhoto(p.id)}
+                          onReview={() => setTab("review")}
+                          onRetryUpload={() => {
+                            retryPhoto.current = p.id;
+                            fileInput.current?.click();
+                          }}
+                        />
+                      );
                     const status =
                       analyzing === p.id ? "pending" : (a?.status ?? "ready");
                     return (
@@ -431,10 +586,7 @@ function Workspace({ api }: { api: InspectionApi }) {
                             <button
                               disabled={busy || status === "pending"}
                               onClick={() => {
-                                setAnalyzing(p.id);
-                                void update(() =>
-                                  api.analyze(state.id, p.id),
-                                ).finally(() => setAnalyzing(""));
+                                void analyzePhoto(p.id);
                               }}
                             >
                               {status === "pending"
@@ -469,12 +621,20 @@ function Workspace({ api }: { api: InspectionApi }) {
                   <FindingCard
                     key={f.id}
                     finding={f}
+                    evidenceUrl={api.content?.contentUrl(
+                      state.id,
+                      f.original_proposal.evidence_photo_ids[0],
+                    )}
                     busy={busy}
                     onReview={async (body) => {
+                      if (mutationInFlight.current)
+                        throw new Error("Operation in progress");
+                      mutationInFlight.current = true;
                       setBusy(true);
                       try {
                         setState(await api.review(state.id, f.id, body));
                       } finally {
+                        mutationInFlight.current = false;
                         setBusy(false);
                       }
                     }}
@@ -531,7 +691,9 @@ export default function App({ api }: { api: InspectionApi }) {
           <span className="brand-dot">.</span>
         </Link>
         <div className="header-right">
-          <span className="demo-pill">Demo workspace</span>
+          <span className="demo-pill">
+            {api.mode === "http" ? "Local workspace" : "Demo workspace"}
+          </span>
           <span className="avatar" aria-label="Demo user">
             RP
           </span>
@@ -559,7 +721,11 @@ export default function App({ api }: { api: InspectionApi }) {
       <footer>
         <strong>RoomProof</strong>
         <span>A clearer record. A calmer move.</span>
-        <span>Demo · no real analysis or uploads</span>
+        <span>
+          {api.mode === "http"
+            ? "Local development · human review required"
+            : "Demo · no real analysis or uploads"}
+        </span>
       </footer>
     </>
   );

@@ -936,3 +936,4 @@ legend {
     grid-template-columns: 1fr 1fr;
   }
 }
+.photo-evidence { display:block; width:100%; object-fit:contain; background:#eee; }

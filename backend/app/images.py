@@ -61,7 +61,11 @@ class ImageSource(Protocol):
 class InMemoryImageSource:
     """Instance-local development storage. Binding is write-once, not an upload API."""
 
-    def __init__(self):
+    def __init__(self, max_total_bytes: int = 100 * 1024 * 1024):
+        if type(max_total_bytes) is not int or max_total_bytes <= 0:
+            raise ValueError("Storage bound must be a positive integer")
+        self.max_total_bytes = max_total_bytes
+        self._total_bytes = 0
         self._images: dict[UUID, bytes] = {}
         self._lock = Lock()
 
@@ -71,7 +75,10 @@ class InMemoryImageSource:
         with self._lock:
             if photo_id in self._images:
                 raise ImageAlreadyBound("Image already bound to photo")
+            if self._total_bytes + len(content) > self.max_total_bytes:
+                raise ImageTooLarge("Transient storage limit exceeded")
             self._images[photo_id] = content
+            self._total_bytes += len(content)
 
     def read(self, photo_id: UUID) -> bytes:
         _photo_id(photo_id)

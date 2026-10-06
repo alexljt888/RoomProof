@@ -20,10 +20,12 @@ export function Evidence({ variant = "wall" }: { variant?: string }) {
 }
 export function FindingCard({
   finding,
+  evidenceUrl,
   onReview,
   busy,
 }: {
   finding: Finding;
+  evidenceUrl?: string;
   onReview: (body: ReviewRequest) => Promise<void>;
   busy: boolean;
 }) {
@@ -76,7 +78,15 @@ export function FindingCard({
   return (
     <article className="finding card">
       <div className="finding-image">
-        <Evidence />
+        {evidenceUrl ? (
+          <img
+            className="evidence photo-evidence"
+            src={evidenceUrl}
+            alt="Original finding evidence"
+          />
+        ) : (
+          <Evidence />
+        )}
         <p className="caption">Original evidence · linked room photo</p>
       </div>
       <div className="finding-content">

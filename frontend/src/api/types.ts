@@ -110,6 +110,8 @@ export interface Inspection extends InspectionSummary {
   findings: Finding[];
 }
 export interface InspectionApi {
+  mode?: "http" | "demo";
+  content?: PhotoContentApi;
   list(): Promise<InspectionSummary[]>;
   get(id: string): Promise<Inspection>;
   create(body: CreateInspection): Promise<Inspection>;
@@ -121,4 +123,9 @@ export interface InspectionApi {
   ): Promise<Inspection>;
   analyze(id: string, photo: string): Promise<Inspection>;
   review(id: string, finding: string, body: ReviewRequest): Promise<Inspection>;
+}
+
+export interface PhotoContentApi {
+  upload(id: string, photo: string, file: File): Promise<void>;
+  contentUrl(id: string, photo: string): string;
 }
