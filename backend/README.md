@@ -57,7 +57,8 @@ review methods check state before validating a new payload and raise
 An analysis completes with `findings_present`, `no_visible_findings`, or
 `uncertain`, or fails with a safe enumerated code. Only successful analyses whose
 outcome permits findings can be their source. Services assemble the
-analysis and findings atomically; only a configured fake analyzer runs here. Raw provider errors
+analysis and findings atomically through the injected analyzer. `FakePhotoAnalyzer`
+remains the default; `OpenAIPhotoAnalyzer` requires explicit injection. Raw provider errors
 must not be stored as failure information.
 
 `InvalidDomainData` identifies invalid values/relationships (future HTTP 422);
@@ -131,8 +132,9 @@ state = service.analyze_photo(inspection_id, photo_id)
 
 This repository is development/testing only: process-local, non-durable, no
 persistence across restart, and unsuitable for multiple production workers.
-There is no upload/storage, filesystem image loading, real AI/image inference,
-authentication, frontend, or PDF/report generation. A process interruption can leave a pending
+There is no production image upload/storage, authentication, frontend, PDF/report
+generation, or deployment. The manual smoke harness can read one local image and
+explicitly compose the real adapter; the default app requires no API key. A process interruption can leave a pending
 analysis in a surviving repository instance; recovery/timeouts are not implemented.
 
 
@@ -233,7 +235,8 @@ Do not log or serialize image bytes; repr exclusion is not a general redaction t
 Image-layer errors distinguish missing bindings, duplicate bindings, invalid
 images, unsupported formats, and resource limits using fixed safe messages.
 
-No bytes or hashes enter `Photo` or `InspectionState`. No service/analyzer wiring,
+Step 1 alone added no bytes or hashes to `Photo` or `InspectionState`; Step 3 later
+added analysis provenance hashes, never image bytes. No service/analyzer wiring,
 image upload, filesystem loading, S3, or real AI calls are implemented in this step.
 The development source retains all bound bytes until its instance is released;
 it has no total-storage quota and is not production storage. Synthetic in-memory
@@ -244,8 +247,8 @@ tests run with the existing backend test command above.
 `openai_analyzer.py` implements `OpenAIPhotoAnalyzer` with an injected image source,
 SDK client, and frozen `AnalyzerConfig` requiring an explicit model identifier.
 It creates no client, reads no environment or `.env`, and makes no request at import.
-Client creation, credential loading, lifecycle, and application activation belong
-to later composition work. The normal `create_app()` still uses `FakePhotoAnalyzer`.
+Client creation, credential handling, and lifecycle belong to explicit composition,
+now provided by the manual Step 4 harness. The normal `create_app()` still uses `FakePhotoAnalyzer`.
 No real-provider smoke test has occurred for this adapter.
 
 `analyze(photo)` uses only `photo.id` to resolve bytes, calls Step 1 preparation,
@@ -323,9 +326,8 @@ source-analysis links are unchanged. In-memory provenance is not durable storage
 32 MiB output limit still applies. The adapter checks a supplied bound after image
 preparation and before base64 allocation or provider invocation. Rejection returns
 `unreadable_image` with preparation provenance. Base64 adds roughly one third to the
-image size, before JSON/prompt/schema overhead. Step 4 real composition must select
-and explicitly supply a provider/model-appropriate bound using current documentation;
-no numerical provider limit has been guessed. Step 1 policy is unchanged.
+image size, before JSON/prompt/schema overhead. Step 4 composition explicitly supplies the approved 20971520-byte prepared-image
+bound; this is smoke configuration, not a general claim about all provider limits. Step 1 policy is unchanged.
 
 The permanent SDK compatibility regression uses OpenAI 3.8.0 with HTTPX2
 `MockTransport`, a synthetic placeholder credential, and blocked socket connections.
@@ -337,3 +339,49 @@ Normal tests use generated in-memory images and injected clients. They need no
 API key, private images, or network. OpenAI 3.8.0 adds HTTPX2 transitively; with it
 installed, Starlette 1.7.0 selects HTTPX2 and no longer emits the previously noted
 HTTPX fallback warning. The existing direct dependency pins remain unchanged.
+
+## Phase 3 Step 4: manual smoke preparation (not executed)
+
+`backend/scripts/smoke_openai_analysis.py` uses `InspectionService` directly with
+`InMemoryInspectionRepository`, `InMemoryImageSource`, and an explicitly injected
+`OpenAIPhotoAnalyzer`. It creates synthetic property/renter/room metadata,
+registers one photo, and binds one local JPEG/PNG to its UUID. Only prepared pixels
+are sent; the local path and filename are not sent. No results are persisted.
+
+The harness is prepared but **the real smoke has not been executed**. The command
+below is for a later, separately authorized run, from the repository root:
+
+```sh
+backend/.venv/bin/python -m backend.scripts.smoke_openai_analysis '<local-image-path>'
+```
+
+Supply `OPENAI_API_KEY` through the process environment using your existing secure
+local workflow; do not put a key in command arguments, shell history, or Git.
+The harness does not load `.env` automatically and does not add a second secret
+file. Missing/blank keys fail before client construction. Default `create_app()`
+continues to use `FakePhotoAnalyzer`, requires no key, and never runs this script.
+Importing the script does not execute it. Automated tests use synthetic inputs
+and mocked clients, never the live smoke.
+
+Fixed approved smoke settings are model `gpt-4.1-mini-2025-04-14`, prepared-image
+bound `20971520` bytes (20 MiB), existing `detail="high"`, 90-second adapter timeout,
+and `max_retries=0`. No output-token cap was added. There is one service analysis
+attempt and at most one Responses invocation; invalid images make no provider
+request. There is no retry loop, fallback, or second verification call. A timeout
+cannot establish whether the provider received the request. Failures stop with a
+nonzero exit; do not automatically rerun. The explicit OpenAI endpoint prevents
+an environment base-URL override from redirecting this smoke.
+
+Output is an allowlisted JSON summary of analysis status/outcome/safe failure code,
+finding count and observation fields, review state/report eligibility, analyzer
+identity, models, and prompt/schema/preparation versions. It excludes paths,
+filenames, credentials, raw requests/responses, image bytes, hashes, and property
+metadata. SDK logging is disabled during execution to avoid diagnostic leakage.
+Keep terminal observations private. Use only a manually approved, non-sensitive
+image already in ignored local storage; never copy it into tracked fixtures.
+
+Exit 0 means the integration completed, including valid zero-finding or uncertain
+outcomes. It does not establish model accuracy. Findings remain pending review,
+with no AI approval or reportability decision. Exit 1 means analysis/setup could
+not complete; exit 2 means missing configuration or invalid local input. No durable
+persistence or production deployment is introduced.
