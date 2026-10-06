@@ -7,7 +7,7 @@ damage, support human review, and eventually generate an evidence-backed report.
 automatically become approved or reportable evidence. Users must review findings
 before any future final report is generated.
 
-## Current status: ML evaluation and backend foundation
+## Current status: real AI integration implemented
 
 ### Implemented — Phase 1: ML feasibility and evaluation
 
@@ -37,6 +37,17 @@ later model-comparison and tuning milestones; no production accuracy is claimed.
 The backend registers **photo metadata only**. Its fake analyzer inspects no image
 bytes and performs no real AI inference. State is local to one process and is lost
 on restart; this is a development foundation, not a production-ready application.
+### Implemented — Phase 3: real AI integration
+
+- Transient image access/preparation and an explicitly injected `OpenAIPhotoAnalyzer`.
+- Structured observations and provider-neutral execution provenance through the
+  normal application workflow. `FakePhotoAnalyzer` remains the key-free default.
+- One controlled real-provider smoke succeeded with one request and zero retries,
+  producing structured provenance and one pending-review finding that was not
+  report eligible. Human review remains required; AI does not decide reportability.
+
+This is an integration result, **not an accuracy or quality benchmark**. There is
+no production image upload/storage, durable persistence, or deployment yet.
 See the [backend README](backend/README.md) for setup, endpoints, limitations, and
 local usage.
 
@@ -66,8 +77,8 @@ limitations; category metrics measure per-image presence, not localization.
 - [`ml/evaluation/`](ml/evaluation/): schemas, batch runner, offline evaluator,
   annotation guide, and synthetic examples.
 - [`ml/tests/`](ml/tests/): offline regression tests.
-- [`backend/`](backend/): Phase 2 domain, application services, and HTTP API
-  foundation; [backend setup and tests](backend/README.md).
+- [`backend/`](backend/): domain, application services, HTTP API, and explicit real AI
+  integration; [backend setup and tests](backend/README.md).
 
 For the ML offline tests, from the repository root with Python 3.12:
 
@@ -84,15 +95,15 @@ for labeling and evaluation instructions.
 
 ## Architecture and planned work
 
-Current: standalone Phase 1 ML/evaluation tooling plus a Phase 2 backend:
+Current: standalone ML/evaluation tooling plus the backend and real AI integration:
 
 ```text
 FastAPI / HTTP schemas → application services → domain / in-memory repository
                                 ↓
-                         PhotoAnalyzer → deterministic fake analyzer
+                         PhotoAnalyzer → fake (default) / OpenAI (explicit injection)
 ```
 
-Not yet implemented: real backend image/VLM integration, actual image upload and
+Not yet implemented: production image upload and
 object storage, persistent database/PostgreSQL, authentication/accounts,
 React/TypeScript frontend, PDF/report generation, cloud deployment, and production
 infrastructure. Broader AI V2 evaluation and training also remain planned.
@@ -104,5 +115,5 @@ Real inspection images, labels, manifests, generated predictions/results, API
 credentials, and local environments are intentionally excluded from Git. Public
 examples and test fixtures are synthetic. Optional ML baseline inference sends
 images to OpenAI; offline evaluation uses saved local predictions without
-additional API calls. The Phase 2 backend uses only fake analysis and makes no
-external AI calls.
+additional API calls. The default backend uses fake analysis without external AI
+calls; the explicitly invoked real adapter sends prepared images to OpenAI.

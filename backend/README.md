@@ -242,14 +242,14 @@ The development source retains all bound bytes until its instance is released;
 it has no total-storage quota and is not production storage. Synthetic in-memory
 tests run with the existing backend test command above.
 
-## Phase 3 Step 2: OpenAI adapter (not activated)
+## Phase 3 Step 2: explicitly injected OpenAI adapter
 
 `openai_analyzer.py` implements `OpenAIPhotoAnalyzer` with an injected image source,
 SDK client, and frozen `AnalyzerConfig` requiring an explicit model identifier.
 It creates no client, reads no environment or `.env`, and makes no request at import.
 Client creation, credential handling, and lifecycle belong to explicit composition,
 now provided by the manual Step 4 harness. The normal `create_app()` still uses `FakePhotoAnalyzer`.
-No real-provider smoke test has occurred for this adapter.
+The controlled real-provider integration result is recorded under Step 4 below.
 
 `analyze(photo)` uses only `photo.id` to resolve bytes, calls Step 1 preparation,
 and sends the prepared PNG plus the versioned instructions using Responses
@@ -333,14 +333,14 @@ The permanent SDK compatibility regression uses OpenAI 3.8.0 with HTTPX2
 `MockTransport`, a synthetic placeholder credential, and blocked socket connections.
 It covers structured parsing/request construction and one transport attempt for a
 retryable failure despite retries on the caller's client. Other tests use injected
-stubs and memory-only synthetic images. No real provider smoke test has occurred.
+stubs and memory-only synthetic images; these tests make no real provider calls.
 
 Normal tests use generated in-memory images and injected clients. They need no
 API key, private images, or network. OpenAI 3.8.0 adds HTTPX2 transitively; with it
 installed, Starlette 1.7.0 selects HTTPX2 and no longer emits the previously noted
 HTTPX fallback warning. The existing direct dependency pins remain unchanged.
 
-## Phase 3 Step 4: manual smoke preparation (not executed)
+## Phase 3 Step 4: controlled integration smoke
 
 `backend/scripts/smoke_openai_analysis.py` uses `InspectionService` directly with
 `InMemoryInspectionRepository`, `InMemoryImageSource`, and an explicitly injected
@@ -348,8 +348,17 @@ HTTPX fallback warning. The existing direct dependency pins remain unchanged.
 registers one photo, and binds one local JPEG/PNG to its UUID. Only prepared pixels
 are sent; the local path and filename are not sent. No results are persisted.
 
-The harness is prepared but **the real smoke has not been executed**. The command
-below is for a later, separately authorized run, from the repository root:
+One controlled real-provider smoke succeeded: one request, zero retries, a
+`succeeded` analysis with `findings_present`, structured execution provenance, and
+one `pending_review` finding with report eligibility false. Requested and returned
+model were `gpt-4.1-mini-2025-04-14`; prompt/schema version was
+`roomproof-observations-v1` and preparation version was `rgb-png-v1`. No private
+smoke artifact was written. This verifies integration, **not model accuracy or
+quality**. Human review remains required; AI makes no reportability decision.
+
+Phase 3 real AI integration is implemented. The fake remains the default; there
+is still no production image upload/storage, durable persistence, or deployment.
+The command below is for any future separately authorized run, from the repository root:
 
 ```sh
 backend/.venv/bin/python -m backend.scripts.smoke_openai_analysis '<local-image-path>'
