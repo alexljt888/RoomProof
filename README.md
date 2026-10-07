@@ -7,7 +7,7 @@ damage, support human review, and eventually generate an evidence-backed report.
 automatically become approved or reportable evidence. Users must review findings
 before any future final report is generated.
 
-## Current status: real AI integration implemented
+## Current status: local frontend and explicit real-AI workflow implemented
 
 ### Implemented — Phase 1: ML feasibility and evaluation
 
@@ -34,8 +34,8 @@ later model-comparison and tuning milestones; no production accuracy is claimed.
 - A FastAPI HTTP API with seven workflow operations, explicit request/response
   schemas, safe application-error mapping, and offline backend/API tests.
 
-The backend registers **photo metadata only**. Its fake analyzer inspects no image
-bytes and performs no real AI inference. State is local to one process and is lost
+The domain retains **photo metadata only**; transient bytes are held separately.
+Its fake analyzer inspects no image bytes and performs no real AI inference. State is local to one process and is lost
 on restart; this is a development foundation, not a production-ready application.
 ### Implemented — Phase 3: real AI integration
 
@@ -50,6 +50,21 @@ This is an integration result, **not an accuracy or quality benchmark**. There i
 no production image upload/storage, durable persistence, or deployment yet.
 See the [backend README](backend/README.md) for setup, endpoints, limitations, and
 local usage.
+
+### Implemented — Phase 4: local inspection UI and runtime integration
+
+- React/TypeScript frontend for inspection, rooms, JPEG/PNG upload, analysis,
+  and confirm/edit/reject review, preserving original and approved evidence.
+- Scoped transient photo content shared with the analyzer through ImageSource.
+- Fake/offline remains the default. Explicit backend `ROOMPROOF_ANALYZER=openai`
+  with `ROOMPROOF_OPENAI_MODEL=gpt-6-luna` and backend-only `OPENAI_API_KEY` composes
+  the existing adapter; no frontend secret or direct provider call is involved.
+
+Real mode sends prepared images to OpenAI only on explicit analysis and consumes
+credits. Human review and reportability selection remain required. This runtime
+path has offline integration coverage; a real UI-driven run awaits separate
+authorization. Memory-only storage loses all data on server restart. See
+[frontend setup](frontend/README.md) and [backend configuration](backend/README.md).
 
 ## Why visibility and reportability are separate
 
@@ -95,17 +110,17 @@ for labeling and evaluation instructions.
 
 ## Architecture and planned work
 
-Current: standalone ML/evaluation tooling plus the backend and real AI integration:
+Current: standalone ML/evaluation tooling plus the local browser workflow:
 
 ```text
-FastAPI / HTTP schemas → application services → domain / in-memory repository
+React → FastAPI / HTTP schemas → application services → domain / in-memory repository
                                 ↓
                          PhotoAnalyzer → fake (default) / OpenAI (explicit injection)
 ```
 
 Not yet implemented: production image upload and
 object storage, persistent database/PostgreSQL, authentication/accounts,
-React/TypeScript frontend, PDF/report generation, cloud deployment, and production
+PDF/report generation, cloud deployment, and production
 infrastructure. Broader AI V2 evaluation and training also remain planned.
 The standalone ML baseline is not integrated into the backend.
 

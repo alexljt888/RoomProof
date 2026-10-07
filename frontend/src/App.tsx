@@ -516,7 +516,7 @@ function Workspace({ api }: { api: InspectionApi }) {
             <>
               <p className="caption">
                 {api.content
-                  ? "Local workflow · default backend uses fake analysis. Review every suggestion."
+                  ? "AI suggests. You verify. Review every suggestion before confirming."
                   : "Illustrated examples only. No uploads or AI in this demo."}
               </p>
               {!photos.length ? (

@@ -68,5 +68,16 @@ npm run build
 
 Tests use synthetic files, injected clients, and mocked fetch; no provider calls.
 Backend/ML offline suites remain separate. `node_modules`, build output, and
-coverage are ignored. No authentication, durable storage, deployment, or paid
-provider setup is added in this step.
+coverage are ignored. No authentication, durable storage, or deployment is provided.
+
+## Explicit real-AI backend
+
+The same UI works with either analyzer; it never holds a provider key or calls
+OpenAI. Fake labels come from each backend Analysis. See the
+[backend runtime instructions](../backend/README.md#phase-4-step-3-explicit-local-analyzer-mode)
+for `ROOMPROOF_ANALYZER=openai`, `ROOMPROOF_OPENAI_MODEL=gpt-6-luna`, and the
+backend-only `OPENAI_API_KEY` environment requirement. Fake remains the default.
+Do not put credentials in any `VITE_` variable. No frontend configuration changes
+are needed. Only explicitly configured real mode sends prepared images to OpenAI
+when Analyze is clicked; this consumes credits. Review and reportability choices
+remain mandatory. The UI-driven real run is still awaiting separate authorization.

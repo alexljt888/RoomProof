@@ -132,7 +132,7 @@ state = service.analyze_photo(inspection_id, photo_id)
 
 This repository is development/testing only: process-local, non-durable, no
 persistence across restart, and unsuitable for multiple production workers.
-There is no production image upload/storage, authentication, frontend, PDF/report
+There is no production image upload/storage, authentication, PDF/report
 generation, or deployment. The manual smoke harness can read one local image and
 explicitly compose the real adapter; the default app requires no API key. A process interruption can leave a pending
 analysis in a surviving repository instance; recovery/timeouts are not implemented.
@@ -313,7 +313,7 @@ model, prompt, or image information. The real adapter remains injected through
 `create_app(analyzer=...)`; no real client or key is created/loaded by default.
 Tests register Photo metadata through HTTP, bind generated PNG bytes internally to
 the returned UUID using the same `InMemoryImageSource`, and analyze through the
-existing endpoint. Photo remains metadata-only; there is no upload endpoint.
+existing endpoint. Photo remains metadata-only; Phase 4 adds scoped transient content endpoints.
 
 HTTP analyses expose `provenance: null` while pending. Terminal responses select only
 `requested_model`, `provider_model`, `prompt_version`, `schema_version`, and
@@ -420,8 +420,8 @@ supplying a different upload source is rejected. Future storage can replace
 read/bind behavior without putting storage details into the Photo domain.
 
 The default factory still uses the offline fake and needs no key. Explicit real
-adapter injection remains available as in Phase 3, but no production provider
-configuration or automatic real execution has been added. Content upload does
+adapter injection remains available as in Phase 3; the explicit local runtime
+configuration below now composes it for the HTTP workflow. Content upload does
 not invoke analysis. Browser analysis buttons require loaded content; legacy
 metadata-only fake API callers remain compatible.
 
@@ -434,3 +434,52 @@ backend/.venv/bin/python -m uvicorn backend.app.main:create_app --factory --host
 Run Vite separately as documented in `frontend/README.md`. These local servers
 have no authentication and must not be publicly exposed. Server restart loses
 all state and image bytes; no durable persistence, S3, or deployment exists.
+
+## Phase 4 Step 3: explicit local analyzer mode
+
+`runtime.py` composes the existing adapter into the same service and HTTP routes.
+Missing `ROOMPROOF_ANALYZER` or `ROOMPROOF_ANALYZER=fake` uses the deterministic
+fake without a key or OpenAI client. `ROOMPROOF_ANALYZER=openai` requires both
+nonblank `OPENAI_API_KEY` and `ROOMPROOF_OPENAI_MODEL`; unknown modes or missing
+configuration fail startup with fixed safe messages, never a silent fallback.
+Explicit `create_app(analyzer=...)` injection bypasses environment selection.
+
+For a **future authorized manual real-AI run**, provide the key through a secure
+backend process environment (never a command argument, frontend `VITE_` variable,
+or Git). This factory does not load `.env`. From the repository root:
+
+```sh
+ROOMPROOF_ANALYZER=openai ROOMPROOF_OPENAI_MODEL=gpt-6-luna \
+  backend/.venv/bin/python -m uvicorn backend.app.main:create_app --factory --host 127.0.0.1 --port 8000
+```
+
+Run `npm run dev` from `frontend/` separately. Stop the existing fake server before
+switching; switching/restarting loses all in-memory inspections and images. Use
+one worker, loopback only, without reload for a controlled session. To explicitly
+return to offline mode, use `ROOMPROOF_ANALYZER=fake` with the same backend command.
+Normal `uvicorn app.main:create_app --factory --reload` from `backend/` remains
+fake/key-free when analyzer configuration is absent.
+
+The upload bridge and OpenAI adapter share exactly one `InMemoryImageSource`.
+Upload alone does not invoke AI. Clicking Analyze in real mode sends prepared
+image pixels to OpenAI and consumes API credits. Photo stays metadata-only.
+The selected model is explicit/configurable; initial development configuration is
+`gpt-6-luna`. The runtime fixes a 90-second timeout, `max_retries=0`, official OpenAI
+endpoint, and 20971520-byte (20 MiB) prepared-image bound. Existing `detail="high"`,
+structured output, preparation protections, and no output-token override remain.
+There is no automatic retry/fallback; failures use existing safe analysis states.
+Provider/transport diagnostic logging is disabled to avoid payload leakage;
+application/server logging remains available. The app closes its owned SDK client
+on shutdown; explicitly injected clients remain caller-owned.
+
+Real findings start pending review. Only human confirmation with explicit
+reportability can make a finding eligible; AI never decides reportability.
+Original proposals/evidence remain separate from approved content. Safe provenance
+passes through HTTP, while hashes stay internal. The UI uses returned analyzer
+identity for fake labels, never frontend provider configuration or credentials.
+
+Runtime integration tests use synthetic JPEG/PNG, synthetic credentials, the
+pinned SDK with MockTransport, and blocked DNS/sockets. No real UI-driven model
+call has been performed for Step 3. The earlier Phase 3 smoke is not an accuracy
+benchmark. Storage remains transient; no authentication, durable persistence,
+production storage, or deployment is provided.

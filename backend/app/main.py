@@ -1,12 +1,15 @@
 """Local API factory. The default analyzer is fake and offline."""
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .api import router
 from .photo_content import router as content_router
 from .images import InMemoryImageSource
-from .domain import AnalysisOutcome, Category, Certainty, InvalidDomainData, Surface, TransitionConflict
-from .inference import AnalysisOutput, FakePhotoAnalyzer, PhotoAnalyzer, ProposedFinding
+from .domain import InvalidDomainData, TransitionConflict
+from .inference import PhotoAnalyzer
+from .runtime import compose_analyzer
 from .repository import InMemoryInspectionRepository, NotFound
 from .services import InspectionService
 
@@ -20,16 +23,22 @@ def create_app(*, analyzer: PhotoAnalyzer | None = None,
     if image_source is None:
         image_source = InMemoryImageSource()
 
-    app = FastAPI(title="RoomProof — inspection workflow", version="0.1.0",
-                  description=("Local, non-durable workflow API. Photos are metadata only; "
-                               "the default analyzer is fake. Analyzers may be injected."))
+    owned_client = None
     if analyzer is None:
-        analyzer = FakePhotoAnalyzer(AnalysisOutput(
-            AnalysisOutcome.FINDINGS_PRESENT,
-            (ProposedFinding(Category.SCRATCH, Surface.WALL, "center",
-                             "Synthetic example scratch; no image was inspected", Certainty.CLEAR),),
-            ("Fake analyzer: no image bytes were inspected.",),
-        ))
+        analyzer, owned_client = compose_analyzer(image_source)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        try:
+            yield
+        finally:
+            if owned_client is not None:
+                owned_client.close()
+
+    app = FastAPI(title="RoomProof — inspection workflow", version="0.1.0",
+                  lifespan=lifespan,
+                  description=("Local, non-durable workflow API with transient photo content. "
+                               "The default analyzer is fake; real analysis requires explicit configuration."))
     app.state.image_source = image_source
     app.state.inspection_service = InspectionService(InMemoryInspectionRepository(), analyzer)
 

@@ -34,6 +34,45 @@ const file = (type = "image/png") =>
   );
 
 describe("HTTP-mode photo workflow", () => {
+  it("reviews backend-authoritative real findings without a fake label or provider connection", async () => {
+    const { api, user } = setup();
+    const originalAnalyze = api.analyze.bind(api);
+    vi.spyOn(api, "analyze").mockImplementation(async (iid, pid) => {
+      const state = await originalAnalyze(iid, pid);
+      const analysis = state.analyses.find((a) => a.photo_id === pid)!;
+      analysis.analyzer_id = "openai-photo";
+      analysis.limitations = [];
+      analysis.provenance = {
+        requested_model: "synthetic-model",
+        provider_model: "synthetic-model",
+        prompt_version: "roomproof-observations-v1",
+        schema_version: "roomproof-observations-v1",
+        preparation_version: "rgb-png-v1",
+      };
+      return state;
+    });
+    await user.click(await screen.findByRole("button", { name: /Bedroom/ }));
+    await choose(file());
+    fireEvent.load(await screen.findByRole("img", { name: "Room evidence 1" }));
+    await user.click(screen.getByRole("button", { name: "Analyze photo" }));
+    await user.click(
+      await screen.findByRole("button", { name: "Review suggestions →" }),
+    );
+    expect(
+      screen.queryByText("Fake analysis · no AI inspected this image."),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(/default backend uses fake/),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("pending review")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Confirm" }));
+    await user.click(screen.getByLabelText("No, keep it out"));
+    await user.click(screen.getByRole("button", { name: "Save review" }));
+    expect(api.analyze).toHaveBeenCalledTimes(1);
+    // Global fetch is blocked by test setup; all calls use the injected backend API.
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
   it("binds the selected bytes to this registration, not another tab's unseen photo", async () => {
     const { api, user } = setup();
     await user.click(await screen.findByRole("button", { name: /Bedroom/ }));
