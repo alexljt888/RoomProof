@@ -6,7 +6,7 @@ separate backend environment (keep the existing ML environment unchanged):
 
 ```sh
 python3 -m venv backend/.venv
-backend/.venv/bin/python -m pip install -r backend/requirements.txt
+backend/.venv/bin/python -m pip install -r backend/requirements-dev.txt
 PYTHONDONTWRITEBYTECODE=1 backend/.venv/bin/python -m unittest discover -s backend/tests -v
 backend/.venv/bin/python -m uvicorn backend.app.main:create_app --factory --host 127.0.0.1 --port 8000
 ```
@@ -28,7 +28,7 @@ with clear AI certainty. `confirm(reportable=...)` copies the original proposal;
 confirmation actions both lead to `confirmed`; editing is an action, not a state.
 A completed review cannot be repeated. Only confirmed findings with approved
 `reportable=True` are eligible for eventual report inclusion. Eligibility does
-not prove image availability and does not generate a report.
+not prove image availability; the report export separately checks approved evidence.
 
 Original proposals, evidence references, and approved review snapshots are frozen.
 Dataclasses prevent normal attribute assignment; the two controlled terminal
@@ -132,8 +132,7 @@ state = service.analyze_photo(inspection_id, photo_id)
 
 This repository is development/testing only: process-local, non-durable, no
 persistence across restart, and unsuitable for multiple production workers.
-There is no production image upload/storage, authentication, PDF/report
-generation, or deployment. The manual smoke harness can read one local image and
+There is no production image upload/storage, authentication, or deployment. The manual smoke harness can read one local image and
 explicitly compose the real adapter; the default app requires no API key. A process interruption can leave a pending
 analysis in a surviving repository instance; recovery/timeouts are not implemented.
 
@@ -479,7 +478,53 @@ passes through HTTP, while hashes stay internal. The UI uses returned analyzer
 identity for fake labels, never frontend provider configuration or credentials.
 
 Runtime integration tests use synthetic JPEG/PNG, synthetic credentials, the
-pinned SDK with MockTransport, and blocked DNS/sockets. No real UI-driven model
-call has been performed for Step 3. The earlier Phase 3 smoke is not an accuracy
-benchmark. Storage remains transient; no authentication, durable persistence,
+pinned SDK with MockTransport, and blocked DNS/sockets. One controlled Step 3
+UI-driven live test passed with `gpt-6-luna`: upload, one analysis POST (200),
+structured output, pending review, and human Edit & Confirm. The user corrected
+the approved category from scratch to hole and selected reportability; the
+original AI proposal and source evidence remained intact. No visible automatic
+retry, traceback, or credential exposure was observed. This verifies live access
+and integration, not accuracy. The earlier Phase 3 smoke is also not a benchmark. Storage remains transient; no authentication, durable persistence,
 production storage, or deployment is provided.
+
+## Phase 4 Step 4: reviewed reports (current work)
+
+`reports.py` projects one validated repository snapshot into an allowlisted read
+model. Only confirmed findings with approved `reportable=True` appear, grouped by
+room, using approved text and approved evidence IDs. Preview/export never mutate
+inspection or review state and never invoke an analyzer. Domains remain metadata-only.
+
+- `GET /inspections/{id}/report`: backend-authoritative JSON preview, no-store.
+  Includes room/finding counts, pending reviews/analyses, unanalysed photos and
+  failed attempts. Pending findings are excluded but prominently counted.
+- `GET /inspections/{id}/report.pdf`: memory-only deterministic ReportLab PDF,
+  `application/pdf`, fixed attachment filename `roomproof-inspection.pdf`, no-store.
+  Any registered photo without successful analysis, pending review, or active
+  analysis blocks with 409. Missing/invalid approved evidence
+  also blocks with safe 409. Both endpoints return 404 for unknown inspections.
+  No arbitrary path or URL input is accepted. Images resolve by validated UUID
+  from ImageSource and pass existing preparation before embedding.
+
+Zero findings is valid, explicitly stated without claiming the property is
+undamaged. Unanalysed photos and failed attempts remain disclosed. `export_ready` is computed
+from photos lacking successful analysis, pending reviews/analyses, and unavailable
+approved evidence; both PDF generation and the UI use this backend decision.
+A failed attempt blocks until that photo has a successful retry; historical failures
+remain disclosed but do not block after success. Every registered photo is required,
+including replacement-evidence photos and metadata awaiting upload.
+`review_complete` alone is not export eligibility. PDF export rechecks the current snapshot even
+if the preview is stale. All approved evidence is required, including replacements;
+original AI evidence is never substituted. The download is a snapshot, not a finalization lock.
+
+ReportLab 4.4.9 is the runtime dependency; pypdf 6.10.0 is test-only in
+`requirements-dev.txt` for text/image verification. The bundled Vera font is used
+without system-font dependencies. Unsupported characters (including CJK) explicitly
+block PDF export with 422 rather than silently disappearing; preview preserves text.
+No server PDF files or report persistence are created. Existing transient storage
+limits and restart data loss still apply. Do not expose the unauthenticated app publicly.
+
+Phase 4 finishes the local product; Phase 5 adds durable infrastructure and hardening
+(see root roadmap). Deferred P2s: post-client/pre-lifespan construction cleanup,
+existing photo-card missing/connection error ambiguity, and a dedicated aggregate
+memory race test. Report evidence errors use neutral wording and export checks bytes
+server-side, so the existing photo-card ambiguity cannot silently omit report evidence.

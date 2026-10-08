@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from .api import router
+from .report_api import router as report_router
 from .photo_content import router as content_router
 from .images import InMemoryImageSource
 from .domain import InvalidDomainData, TransitionConflict
@@ -59,4 +60,5 @@ def create_app(*, analyzer: PhotoAnalyzer | None = None,
     app.add_exception_handler(InvalidDomainData, invalid)
     app.include_router(router)
     app.include_router(content_router)
+    app.include_router(report_router)
     return app

@@ -112,6 +112,10 @@ export interface Inspection extends InspectionSummary {
 export interface InspectionApi {
   mode?: "http" | "demo";
   content?: PhotoContentApi;
+  reports?: {
+    preview(id: string): Promise<InspectionReport>;
+    download(id: string): Promise<Blob>;
+  };
   list(): Promise<InspectionSummary[]>;
   get(id: string): Promise<Inspection>;
   create(body: CreateInspection): Promise<Inspection>;
@@ -128,4 +132,33 @@ export interface InspectionApi {
 export interface PhotoContentApi {
   upload(id: string, photo: string, file: File): Promise<void>;
   contentUrl(id: string, photo: string): string;
+}
+
+export interface InspectionReport {
+  inspection_id: string;
+  address: string;
+  unit: string | null;
+  renter: string;
+  room_count: number;
+  finding_count: number;
+  pending_findings: number;
+  pending_analyses: number;
+  unanalysed_photos: number;
+  failed_analyses: number;
+  review_complete: boolean;
+  photos_needing_analysis: number;
+  unavailable_evidence: number;
+  export_ready: boolean;
+  rooms: {
+    id: string;
+    name: string;
+    findings: {
+      id: string;
+      category: string;
+      surface: string;
+      location: string;
+      description: string;
+      evidence_photo_ids: string[];
+    }[];
+  }[];
 }

@@ -678,7 +678,8 @@ aside h2 {
   margin-top: 10px;
   font-size: 10px;
 }
-.finding-content {
+.finding-content,
+.report-card {
   padding: 23px;
 }
 .finding-content .eyebrow {
@@ -778,6 +779,29 @@ legend {
 .metric span {
   font-size: 11px;
   color: #6f778d;
+}
+/* Report spacing follows the existing review-card and photo-grid rhythm. */
+.report-preview {
+  display: grid;
+  gap: 20px;
+  min-width: 0;
+}
+.report-room {
+  display: grid;
+  gap: 15px;
+  min-width: 0;
+}
+.report-preview > p,
+.report-preview > .row > h3,
+.report-room > h3,
+.report-card > :first-child {
+  margin-top: 0;
+}
+.report-preview > p,
+.report-preview > .row > h3,
+.report-room > h3,
+.report-card > :last-child {
+  margin-bottom: 0;
 }
 .summary-note {
   padding: 25px;
@@ -911,7 +935,8 @@ legend {
   .actions button {
     flex: 1;
   }
-  .finding-content {
+  .finding-content,
+  .report-card {
     padding: 20px;
   }
   .choices {

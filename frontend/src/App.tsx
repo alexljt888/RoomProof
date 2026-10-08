@@ -1,3 +1,4 @@
+import ReportView from "./components/ReportView";
 import { useEffect, useRef, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router";
 import type { InspectionApi, Inspection, InspectionSummary } from "./api/types";
@@ -188,7 +189,9 @@ function Workspace({ api }: { api: InspectionApi }) {
   const [room, setRoom] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<"photos" | "review" | "summary">("photos");
+  const [tab, setTab] = useState<"photos" | "review" | "summary" | "report">(
+    "photos",
+  );
   const [adding, setAdding] = useState(false);
   const [roomName, setRoomName] = useState("");
   const [analyzing, setAnalyzing] = useState("");
@@ -497,7 +500,7 @@ function Workspace({ api }: { api: InspectionApi }) {
             )}
           </div>
           <div className="tabs" aria-label="Workspace views">
-            {(["photos", "review", "summary"] as const).map((t) => (
+            {(["photos", "review", "summary", "report"] as const).map((t) => (
               <button
                 key={t}
                 aria-pressed={tab === t}
@@ -508,7 +511,9 @@ function Workspace({ api }: { api: InspectionApi }) {
                   ? "Photos"
                   : t === "review"
                     ? `Review (${findings.filter((f) => f.state === "pending_review").length})`
-                    : "Inspection summary"}
+                    : t === "summary"
+                      ? "Inspection summary"
+                      : "Report"}
               </button>
             ))}
           </div>
@@ -648,6 +653,9 @@ function Workspace({ api }: { api: InspectionApi }) {
               )}
             </>
           )}
+          {tab === "report" && (
+            <ReportView key={state.id} api={api} inspectionId={state.id} />
+          )}
           {tab === "summary" && (
             <>
               <h3>Your review, at a glance</h3>
@@ -671,8 +679,8 @@ function Workspace({ api }: { api: InspectionApi }) {
                     : "All current suggestions have been reviewed. You can continue documenting other rooms."}
                 </p>
                 <p className="caption">
-                  This is a review summary, not a final report. Report
-                  generation is planned for a later milestone.
+                  Open Report to preview approved content and download a PDF.
+                  Local state is lost when the backend restarts.
                 </p>
               </div>
             </>

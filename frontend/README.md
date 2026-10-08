@@ -50,7 +50,7 @@ successful uncertain/no-findings outcome is distinct from a failed Analysis.
 Review every finding: confirm or edit with an explicit reportability Yes/No, or
 reject with an optional reason. Original proposal/evidence and approved content
 stay separate; completed reviews are read-only. Summary counts use returned
-backend state. There is no report generation or AI reportability decision.
+backend state. AI makes no reportability decision; the Report tab projects approved content.
 
 ## Boundaries and checks
 
@@ -80,4 +80,23 @@ backend-only `OPENAI_API_KEY` environment requirement. Fake remains the default.
 Do not put credentials in any `VITE_` variable. No frontend configuration changes
 are needed. Only explicitly configured real mode sends prepared images to OpenAI
 when Analyze is clicked; this consumes credits. Review and reportability choices
-remain mandatory. The UI-driven real run is still awaiting separate authorization.
+remain mandatory. One controlled UI-driven live run passed with `gpt-6-luna`, including human
+Edit & Confirm with separate original and approved content. This is integration
+verification, not an accuracy benchmark.
+
+## Report preview and PDF (Phase 4 Step 4)
+
+Open Report after review. The preview fetches authoritative backend report data;
+it does not reconstruct eligibility from React state. Refresh preview to retrieve
+changes from another client. Missing successful analysis, pending review/analysis, and unavailable approved
+evidence are clearly shown. Backend `export_ready` controls Download PDF.
+Failed analysis requires a successful retry; resolved historical failures do not block. Export rechecks server state and blocks if approved evidence is missing.
+Evidence display failures use neutral wording rather than asserting missing content.
+Only human-approved reportable content and approved evidence are displayed.
+
+PDF downloads come from the backend, never browser generation or OpenAI. Temporary
+browser download URLs are released. Empty reports are valid but do not certify a
+damage-free property. Reports disclose unanalysed photos and failed attempts. Unicode
+outside the bundled PDF font is explicitly rejected by the backend; preview retains it.
+Fixture-only mode directs users to the local HTTP workflow for reports. Storage remains
+transient; retain downloaded files locally. Phase 5 will address durable infrastructure.

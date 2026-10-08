@@ -40,6 +40,26 @@ export function httpApi(base = "/api"): InspectionApi {
   const path = (id: string) => `/inspections/${encodeURIComponent(id)}`;
   return {
     mode: "http",
+    reports: {
+      preview: (id) => request(path(id) + "/report"),
+      download: async (id) => {
+        const response = await fetch(base + path(id) + "/report.pdf");
+        if (!response.ok) {
+          throw new Error(
+            response.status === 409
+              ? "Export blocked: analysis or review may be incomplete, or approved evidence unavailable. Refresh the preview."
+              : response.status === 422
+                ? "Export blocked: some report text is unsupported by the PDF font."
+                : "Unable to download the report. Check the backend connection.",
+          );
+        }
+        if (
+          !response.headers.get("content-type")?.startsWith("application/pdf")
+        )
+          throw new Error("The backend did not return a PDF.");
+        return response.blob();
+      },
+    },
     content: {
       contentUrl: (id, photo) =>
         base + path(id) + `/photos/${encodeURIComponent(photo)}/content`,

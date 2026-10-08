@@ -62,8 +62,10 @@ local usage.
 
 Real mode sends prepared images to OpenAI only on explicit analysis and consumes
 credits. Human review and reportability selection remain required. This runtime
-path has offline integration coverage; a real UI-driven run awaits separate
-authorization. Memory-only storage loses all data on server restart. See
+path has offline integration coverage and passed one controlled UI-driven live
+test with `gpt-6-luna`: one analysis returned structured findings, followed by
+human Edit & Confirm with original proposal and approved content kept separate.
+This verifies integration and account/model access, not accuracy. Memory-only storage loses all data on server restart. See
 [frontend setup](frontend/README.md) and [backend configuration](backend/README.md).
 
 ## Why visibility and reportability are separate
@@ -120,7 +122,7 @@ React → FastAPI / HTTP schemas → application services → domain / in-memory
 
 Not yet implemented: production image upload and
 object storage, persistent database/PostgreSQL, authentication/accounts,
-PDF/report generation, cloud deployment, and production
+cloud deployment and production
 infrastructure. Broader AI V2 evaluation and training also remain planned.
 The standalone ML baseline is not integrated into the backend.
 
@@ -132,3 +134,24 @@ examples and test fixtures are synthetic. Optional ML baseline inference sends
 images to OpenAI; offline evaluation uses saved local predictions without
 additional API calls. The default backend uses fake analysis without external AI
 calls; the explicitly invoked real adapter sends prepared images to OpenAI.
+
+## Roadmap and current checkpoint
+
+- Phase 1 - AI feasibility and evaluation: complete.
+- Phase 2 - backend/domain workflow: complete.
+- Phase 3 - AI boundary and provenance: complete; production infrastructure is separate.
+- Phase 4 - complete local product: Step 1 polished frontend complete; Step 2 HTTP/photo/review
+  workflow complete; Step 3 real runtime complete and live-tested; Step 4 report preview
+  and PDF export complete. Hands-on review and final focused review passed.
+  Phase 4 Step 4 is complete.
+- Phase 5 - productionization: PostgreSQL, durable S3-compatible object storage,
+  deployment/configuration/secrets, authentication/authorization, concurrency and
+  reliability hardening, observability, and CI/CD.
+
+End of Phase 4 means a complete local end-to-end workflow; end of Phase 5 means
+productionized durable infrastructure. Step 4 reports deterministically project
+only confirmed + reportable human-approved findings and approved evidence.
+Preview remains available while work remains. PDF export requires successful
+analysis of every registered photo, completed human review, no active analyses,
+and valid approved evidence.
+No LLM writes reports. A zero-findings report does not certify absence of damage.
