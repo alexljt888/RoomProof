@@ -7,7 +7,7 @@ damage, support human review, and eventually generate an evidence-backed report.
 automatically become approved or reportable evidence. Users must review findings
 before any future final report is generated.
 
-## Current status: local frontend and explicit real-AI workflow implemented
+## Current status: PHASE 4 — COMPLETE LOCAL PRODUCT
 
 ### Implemented — Phase 1: ML feasibility and evaluation
 
@@ -143,8 +143,8 @@ calls; the explicitly invoked real adapter sends prepared images to OpenAI.
 - Phase 4 - complete local product: Step 1 polished frontend complete; Step 2 HTTP/photo/review
   workflow complete; Step 3 real runtime complete and live-tested; Step 4 report preview
   and PDF export complete. Hands-on review and final focused review passed.
-  Phase 4 Step 4 is complete.
-- Phase 5 - productionization: PostgreSQL, durable S3-compatible object storage,
+  Phase 4 Step 4 and Phase 4 are complete. Final Phase 4 integration review passed.
+- Phase 5 - next phase (not implemented), productionization: PostgreSQL, durable S3-compatible object storage,
   deployment/configuration/secrets, authentication/authorization, concurrency and
   reliability hardening, observability, and CI/CD.
 

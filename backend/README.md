@@ -487,7 +487,10 @@ retry, traceback, or credential exposure was observed. This verifies live access
 and integration, not accuracy. The earlier Phase 3 smoke is also not a benchmark. Storage remains transient; no authentication, durable persistence,
 production storage, or deployment is provided.
 
-## Phase 4 Step 4: reviewed reports (current work)
+## Phase 4 Step 4: reviewed reports (complete)
+
+Hands-on review, final focused review, and final Phase 4 integration review passed.
+Phase 4 is the complete local product; Phase 5 is next and is not implemented.
 
 `reports.py` projects one validated repository snapshot into an allowlisted read
 model. Only confirmed findings with approved `reportable=True` appear, grouped by
@@ -526,5 +529,7 @@ limits and restart data loss still apply. Do not expose the unauthenticated app 
 Phase 4 finishes the local product; Phase 5 adds durable infrastructure and hardening
 (see root roadmap). Deferred P2s: post-client/pre-lifespan construction cleanup,
 existing photo-card missing/connection error ambiguity, and a dedicated aggregate
-memory race test. Report evidence errors use neutral wording and export checks bytes
+memory race test. Phase 5 also retains PDF aggregate resource/concurrency limits
+and PDF font/CJK coverage (unsupported text currently returns 422) as deferred P2s.
+Report evidence errors use neutral wording and export checks bytes
 server-side, so the existing photo-card ambiguity cannot silently omit report evidence.
